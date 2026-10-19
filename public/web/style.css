@@ -1,0 +1,698 @@
+/* Font */
+@font-face {
+  font-family: "Zpix";
+  src: url("../fonts/zpix.ttf") format("truetype");
+  font-weight: normal;
+  font-style: normal;
+}
+
+* {
+  box-sizing: border-box;
+  font-family: "Zpix", monospace;
+  image-rendering: pixelated;
+  -webkit-font-smoothing: none;
+  margin: 0;
+  padding: 0;
+}
+
+/* ── 拓麻歌子 Casio 橄榄绿主题 ── */
+:root {
+  --green: #283023;
+  --green-dim: rgba(46, 54, 40, 0.55);
+  --green-glow: rgba(46, 54, 40, 0.1);
+  --dark: #828980;
+  --cell: #b8c0b3;
+  --grid-bg:
+    repeating-linear-gradient(0deg, transparent, transparent 7px, rgba(255,255,255,0.22) 7px, rgba(255,255,255,0.22) 8px),
+    repeating-linear-gradient(90deg, transparent, transparent 7px, rgba(255,255,255,0.22) 7px, rgba(255,255,255,0.22) 8px);
+
+  /* TV HDMI colour correction — adjust these three values to taste */
+  --tv-brightness: 0.68;
+  --tv-contrast:   1.42;
+  --tv-saturate:   1.35;
+}
+
+html, body {
+  width: 2160px;
+  height: 3840px;
+  overflow: hidden;
+  background: #949b8e;
+  background-image: var(--grid-bg);
+}
+
+
+/* ── BOARD — the dark grid canvas everything sits on ── */
+.board {
+  width: 2160px;
+  height: 3840px;
+  display: flex;
+  flex-direction: column;
+  border: 6px solid rgba(55, 63, 48, 0.55);
+  box-shadow: inset 0 0 40px rgba(0,0,0,0.08);
+  filter: brightness(var(--tv-brightness)) contrast(var(--tv-contrast)) saturate(var(--tv-saturate));
+  overflow: hidden;
+  background: var(--dark);
+  background-image: var(--grid-bg);
+}
+
+/* ── HEADER ── */
+.board-header {
+  background: #b4bbaf;
+  color: var(--green);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 30px 60px;
+  border-bottom: 4px solid rgba(55, 63, 48, 0.50);
+  box-shadow: inset 8px 8px 0 rgba(255,255,255,0.28), inset -2px -10px 0 rgba(55,63,48,0.12);
+  flex-shrink: 0;
+}
+.board-header .title-left,
+.board-header .title-right {
+  font-size: 36px;
+  opacity: 0.5;
+  line-height: 1.6;
+  text-shadow: 2px 2px 0 rgba(40,48,35,0.32), -1px -1px 0 rgba(255,255,255,0.15);
+}
+.board-header .title-main {
+  font-size: 100px;
+  color: var(--green);
+  text-align: center;
+  line-height: 1.2;
+  flex: 1;
+  letter-spacing: 24px;
+  text-shadow:
+    1px 0 0 var(--green),
+    -1px 0 0 var(--green),
+    0 1px 0 var(--green),
+    0 -1px 0 var(--green),
+    9px 9px 0 rgba(40,48,35,0.65),
+    -1px -1px 0 rgba(255,255,255,0.18);
+}
+
+.board-header .title-en {
+  font-size: 36px;
+  opacity: 0.65;
+  letter-spacing: 20px;
+  flex:1;
+  display: block;
+}
+
+/* ── SPOTLIGHT — transparent so board's dark grid shows through gaps ── */
+.spotlight {
+  flex: 1;
+  overflow: hidden;
+  background: transparent;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  position: relative;
+}
+
+/* ── RANK BAR ── */
+.s-rank-bar {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  padding: 4px 80px;
+  background: transparent;
+}
+
+.s-rank {
+  font-size: 100px;
+  color: var(--green);
+  text-shadow: 5px 5px 0 rgba(40,48,35,0.42), -1px -1px 0 rgba(255,255,255,0.22);
+  line-height: 1;
+  letter-spacing: 8px;
+  animation: blink-rank 2.5s step-start infinite;
+}
+
+@keyframes blink-rank {
+  0%, 90%, 100% { opacity: 1; }
+  95% { opacity: 0.25; }
+}
+
+.s-likes-big {
+  font-size: 90px;
+  color: var(--green);
+  letter-spacing: 4px;
+  text-shadow: 4px 4px 0 rgba(40,48,35,0.42), -1px -1px 0 rgba(255,255,255,0.20);
+  animation: blink-likes 1.6s step-start infinite;
+}
+
+@keyframes blink-likes {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.35; }
+}
+
+/* ── AVATAR ROW ── */
+.avatar-row {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 60px;
+  padding: 0 80px 0;
+  background: transparent;
+}
+
+.avatar-wrap {
+  position: relative;
+  flex-shrink: 0;
+  order: 2;
+  background: var(--cell);
+  border: 8px solid rgba(55, 63, 48, 0.60);
+  box-shadow:
+    0 0 0 3px rgba(55, 63, 48, 0.22),
+    inset 0 0 0 8px rgba(255, 255, 255, 0.14),
+    inset 15px 15px 0 rgba(0, 0, 0,0.3),
+    inset -10px -10px 0 rgba(255, 255, 255, 0.18);
+}
+
+.avatar {
+  width: 680px;
+  height: 680px;
+  object-fit: contain;
+  image-rendering: pixelated;
+}
+
+.avatar-placeholder {
+  width: 680px;
+  height: 680px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 120px;
+  letter-spacing: -4px;
+  word-break: break-all;
+  text-align: center;
+  padding: 40px;
+  text-shadow: 4px 4px 0 rgba(40,48,35,0.32), -1px -1px 0 rgba(255,255,255,0.15);
+}
+
+/* ── SCORE STAMP (circular, like app) ── */
+.profile-score-stamp {
+  position: absolute;
+  top: 10px;
+  right: 80px;
+  z-index: 5;
+  width: 300px;
+  height: 300px;
+  border-radius: 50%;
+  border: 12px solid rgba(46, 54, 40, 0.88);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-direction: column;
+  gap: 4px;
+  transform: rotate(-14deg);
+  background: transparent;
+  pointer-events: none;
+  z-index: 2;
+  opacity: 0.92;
+  box-shadow: 8px 12px 0 rgba(0,0,0,0.42);
+}
+.profile-score-stamp::after {
+  content: "";
+  position: absolute;
+  inset: 20px;
+  border-radius: 50%;
+  border: 7px solid rgba(46, 54, 40, 0.70);
+}
+.profile-score-stamp .stamp-date {
+  font-size: 24px;
+  color: rgba(46, 54, 40, 0.92);
+  letter-spacing: 2px;
+  position: relative;
+  z-index: 1;
+  margin-top: 10px;
+  text-shadow: 3px 3px 0 rgba(255,255,255,0.37);
+}
+.profile-score-stamp .stamp-num {
+  font-size: 130px;
+  font-style: italic;
+  color: rgba(46, 54, 40, 0.92);
+  line-height: 1;
+  position: relative;
+  z-index: 1;
+  text-shadow: 6px 6px 0 rgba(255,255,255,0.37), -1px -1px 0 rgba(0,0,0,0.10);
+}
+.profile-score-stamp .stamp-lines {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  width: 140px;
+  position: relative;
+  z-index: 1;
+  margin-bottom: 10px;
+}
+.profile-score-stamp .stamp-lines span {
+  display: block;
+  height: 9px;
+  background: rgba(46, 54, 40, 0.88);
+  border-radius: 2px;
+}
+.profile-score-stamp .stamp-lines span:last-child {
+  width: 62%;
+  margin-left: 19%;
+}
+.profile-score-stamp.stamp-red {
+  border-color: rgba(200, 30, 30, 0.92);
+}
+.profile-score-stamp.stamp-red::after {
+  border-color: rgba(200, 30, 30, 0.82);
+}
+.profile-score-stamp.stamp-red .stamp-date,
+.profile-score-stamp.stamp-red .stamp-num {
+  color: rgba(200, 30, 30, 0.96);
+  text-shadow: 3px 3px 0 rgba(255,255,255,0.37);
+}
+.profile-score-stamp.stamp-red .stamp-lines span {
+  background: rgba(200, 30, 30, 0.92);
+}
+
+/* ── AVATAR SIDE STATS ── */
+/* Left panel: name + species */
+.avatar-meta-left {
+  flex: 1;
+  order: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  justify-content: center;
+  gap: 24px;
+  padding: 10px 0;
+  overflow: hidden;
+}
+
+.avatar-name-display {
+  font-size: 84px;
+  color: var(--green);
+  text-align: right;
+  text-shadow: 4px 4px 0 rgba(40,48,35,0.42), -1px -1px 0 rgba(255,255,255,0.20);
+  letter-spacing: 4px;
+  word-break: break-all;
+  width: 100%;
+}
+
+.avatar-breed-display {
+  font-size: 40px;
+  color: var(--green-dim);
+  text-align: right;
+  text-shadow: 2px 2px 0 rgba(40,48,35,0.32), -1px -1px 0 rgba(255,255,255,0.15);
+  letter-spacing: 2px;
+  line-height: 1.2;
+  width: 100%;
+}
+
+.avatar-breed-display small {
+  display: block;
+  font-size: 0.72em;
+  opacity: 0.75;
+  text-align: right;
+}
+
+/* Right panel: likes on top, skips below */
+.avatar-stats-right {
+  flex: 1;
+  order: 3;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  justify-content: flex-start;
+  gap: 24px;
+  overflow: hidden;
+  padding: 10px 0;
+}
+
+.avatar-stats-likes {
+  display: flex;
+  flex-wrap: wrap;
+  align-content: flex-start;
+  justify-content: flex-start;
+  gap: 12px;
+  overflow: hidden;
+  width: 100%;
+}
+
+.avatar-stats-skips {
+  display: flex;
+  flex-wrap: wrap;
+  align-content: flex-start;
+  justify-content: flex-start;
+  gap: 12px;
+  overflow: hidden;
+  width: 100%;
+  padding-top: 20px;
+  border-top: 2px solid rgba(255, 80, 80, 0.2);
+}
+
+.emoji-pile {
+  flex: 1;
+  display: flex;
+  flex-wrap: wrap;
+  align-content: flex-start;
+  gap: 12px;
+  overflow: hidden;
+  padding: 10px 0;
+}
+
+.emoji-pile-skips {
+  border-top: 2px solid rgba(255, 80, 80, 0.2);
+  padding-top: 20px;
+}
+
+.pixel-emoji {
+  width: 100px;
+  height: auto;
+  image-rendering: pixelated;
+}
+
+.pixel-emoji-skip {
+  width: 80px;
+}
+
+.stat-empty {
+  font-size: 80px;
+  color: var(--green-dim);
+  text-shadow: 2px 2px 0 rgba(40,48,35,0.26), -1px -1px 0 rgba(255,255,255,0.12);
+}
+
+/* ── CARD (info sections) ── */
+.card {
+  flex: 1;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  padding: 16px 60px 30px;
+  gap: 16px;
+  min-height: 0;
+  background: transparent;
+}
+
+.section,
+.cell {
+  position: relative;
+  container-type: inline-size;
+  background: var(--cell);
+  border: 8px solid rgba(55, 63, 48, 0.60);
+  box-shadow:
+    0 0 0 3px rgba(55, 63, 48, 0.22),
+    inset 0 0 0 8px rgba(255, 255, 255, 0.14),
+    inset 15px 15px 0 rgba(0, 0, 0,0.3),
+    inset -10px -10px 0 rgba(255, 255, 255, 0.18);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  min-height: 0;
+  overflow: hidden;
+  padding: 12px 24px 10px;
+  gap: 6px;
+}
+
+/* uniform row heights so bilingual content (label 34px + value 52px + small 34px + padding) always fits */
+.section    { flex: 1; }
+.section-lg { flex: 1; }
+
+/* ── Label ── */
+.label {
+  align-self: flex-start;
+  font-size: 34px;
+  color: var(--green-dim);
+  letter-spacing: 2px;
+  text-shadow: 2px 2px 0 rgba(0,0,0,0.42), -1px -1px 0 rgba(255,255,255,0.18);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  width: 100%;
+  flex-shrink: 0;
+}
+
+.label br { display: none; }
+.label small { font-size: 0.78em; opacity: 0.75; }
+.label small::before { content: " / "; }
+
+/* ── Value — uniform 52px across all cells and sections ── */
+.value {
+  font-size: 52px;
+  color: var(--green);
+  text-align: center;
+  text-shadow: 4px 4px 0 rgba(40,48,35,0.42), -1px -1px 0 rgba(255,255,255,0.20);
+  letter-spacing: 2px;
+  word-break: break-word;
+  overflow-wrap: break-word;
+  line-height: 1.2;
+  max-width: 100%;
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+
+/* bilingual English line — full-width sections */
+.value small {
+  font-size: 0.65em;
+  opacity: 0.72;
+  display: block;
+  text-align: center;
+  line-height: 1.2;
+  margin-top: 2px;
+  letter-spacing: 1px;
+}
+
+/* grid cells: smaller English, never wrap */
+.grid-2 .value small,
+.grid-3 .value small {
+  font-size: 0.50em;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 100%;
+}
+
+/* compact cells (学历→谈过 rows): Chinese stays 52px, English extra-small + no wrap */
+.cell-sm .value small {
+  font-size: 0.36em;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 100%;
+}
+
+/* Territory value: use block layout so <br> acts as normal line break */
+.row-2x > .section:first-child .value {
+  display: block;
+  line-height: 1.2;
+  text-align: center;
+}
+.row-2x > .section:first-child .value small {
+  margin-top: 4px;
+}
+
+/* <br> inside flex column takes up space — collapse it */
+.value br {
+  display: block;
+  height: 0;
+  font-size: 0;
+  line-height: 0;
+  margin: 0;
+}
+
+.row-tall { flex: 1; }
+.row-2x {
+  flex: 1.8;
+  display: flex;
+  flex-direction: row;
+  gap: 16px;
+  min-height: 0;
+}
+.row-2x > .section:first-child { flex: 2; }
+.row-2x > .section:last-child  { flex: 1; }
+
+.mixed-mark {
+  color: #ff6b6b;
+  text-shadow: 1px 1px 8px rgba(255,107,107,0.6);
+}
+
+.grid-3 {
+  flex: 1;
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  grid-template-rows: 1fr;
+  gap: 16px;
+  min-height: 0;
+}
+
+.grid-2 {
+  flex: 1;
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  grid-template-rows: 1fr;
+  gap: 16px;
+  min-height: 0;
+}
+
+
+/* ── PROGRESS BAR ── */
+.progress-wrap {
+  height: 16px;
+  background: transparent;
+  flex-shrink: 0;
+}
+
+.progress-bar {
+  height: 100%;
+  width: 0%;
+  background: var(--green);
+  box-shadow: none;
+}
+
+.progress-bar.running {
+  animation: progress 45s linear forwards;
+}
+
+@keyframes progress {
+  from { width: 0%; }
+  to   { width: 100%; }
+}
+
+/* ── 新闻 Ticker 滚动条 ── */
+.ticker-bar {
+  display: flex;
+  align-items: center;
+  height: 100px;
+  background: var(--cell);
+  overflow: hidden;
+  flex-shrink: 0;
+  box-shadow: inset 0 8px 0 rgba(255,255,255,0.12), inset 0 -8px 0 rgba(0,0,0,0.08);
+}
+
+.ticker-live {
+  flex-shrink: 0;
+  padding: 0 40px;
+  font-size: 44px;
+  color: #bbcdb2;
+  background: var(--green);
+  height: 100%;
+  display: flex;
+  align-items: center;
+  letter-spacing: 4px;
+  font-weight: bold;
+  text-shadow: 4px 4px 0 rgba(0,0,0,0.55), -1px -1px 0 rgba(255,255,255,0.22);
+}
+
+.ticker-scroll {
+  flex: 1;
+  overflow: hidden;
+  height: 100%;
+  display: flex;
+  align-items: center;
+}
+
+.ticker-content {
+  display: inline-flex;
+  align-items: center;
+  white-space: nowrap;
+  animation: ticker-scroll linear infinite;
+}
+
+@keyframes ticker-scroll {
+  from { transform: translateX(0); }
+  to   { transform: translateX(-50%); }
+}
+
+.ticker-item {
+  font-size: 44px;
+  padding: 0 60px;
+  letter-spacing: 2px;
+  color: var(--green);
+  text-shadow: 4px 4px 0 rgba(40,48,35,0.55), -1px -1px 0 rgba(255,255,255,0.25);
+}
+
+.ticker-sep {
+  font-size: 44px;
+  color: var(--green-dim);
+  padding: 0 20px;
+  text-shadow: 4px 4px 0 rgba(40,48,35,0.48), -1px -1px 0 rgba(255,255,255,0.20);
+}
+
+.ticker-item-alert,
+.ticker-item-like  {
+  color: var(--green);
+  text-shadow: 4px 4px 0 rgba(40,48,35,0.58), -1px -1px 0 rgba(255,255,255,0.25);
+}
+
+/* ── FOOTER ── */
+
+/* ── 弹幕层 ── */
+#danmaku-layer {
+  position: fixed;
+  inset: 0;
+  filter: brightness(var(--tv-brightness)) contrast(var(--tv-contrast)) saturate(var(--tv-saturate));
+  pointer-events: none;
+  z-index: 9999;
+  overflow: hidden;
+}
+
+.danmaku {
+  position: absolute;
+  left: 100%;
+  white-space: nowrap;
+  font-family: "Zpix", monospace;
+  font-size: 44px;
+  padding: 10px 36px;
+  animation: fly-left 16s linear forwards;
+}
+
+.danmaku-like,
+.danmaku-skip,
+.danmaku-comment {
+  color: #283023;
+  text-shadow: 4px 4px 0 rgba(40,48,35,0.52), -1px -1px 0 rgba(255,255,255,0.10);
+  border: 6px solid rgba(46,54,40,0.50);
+  background: var(--cell);
+  box-shadow: 0 0 0 3px rgba(55,63,48,0.35), 6px 10px 0 rgba(0,0,0,0.38);
+}
+
+@keyframes fly-left {
+  from { transform: translateX(0); }
+  to   { transform: translateX(calc(-2160px - 100%)); }
+}
+
+/* ── In-cell interpretation bubbles (same mechanic as app, scaled for 4K) ── */
+.has-web-bubbles {
+  overflow: visible !important;
+  z-index: 5;
+}
+
+.web-interp-bubble {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  white-space: nowrap;
+  color: #cc1e1e;
+  font-size: 44px;
+  pointer-events: none;
+  text-shadow: 3px 3px 14px rgba(255, 60, 60, 0.72);
+  animation:
+    web-bubble-in   0.7s cubic-bezier(0.22, 1, 0.36, 1) forwards,
+    web-bubble-drift 2.8s ease-in-out infinite;
+  z-index: 20;
+  line-height: 1.3;
+}
+
+@keyframes web-bubble-in {
+  0%   { transform: translate(-50%, -50%) scale(0); opacity: 0; }
+  38%  { transform: translate(calc(-50% + var(--sx)), calc(-50% + var(--sy))) scale(1.2); opacity: 1; }
+  100% { transform: translate(calc(-50% + var(--fx)), calc(-50% + var(--fy))) scale(1); opacity: 1; }
+}
+
+@keyframes web-bubble-drift {
+  0%, 100% { transform: translate(calc(-50% + var(--fx)), calc(-50% + var(--fy))) scale(1); }
+  33%       { transform: translate(calc(-50% + var(--fx) + var(--dx)), calc(-50% + var(--fy) + var(--dy))) scale(1); }
+  66%       { transform: translate(calc(-50% + var(--fx) - var(--dy)), calc(-50% + var(--fy) + var(--dx))) scale(1); }
+}
+
+/* board is the only element that needs the grid bg — transparent children show it through */

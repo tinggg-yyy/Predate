@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=2160, initial-scale=1.0" />
+    <title>PET RANKING</title>
+    <link href="https://unpkg.com/nes.css@2.3.0/css/nes.min.css" rel="stylesheet" />
+    <link rel="stylesheet" href="style.css" />
+  </head>
+  <body>
+    <div class="board">
+      <div class="board-header">
+        <div class="title-left">NOW<br />RUN</div>
+        <div class="title-main">必 吃 榜<br><span class="title-en">MUST    EAT    LIST</span></div>
+        <div class="title-right">TOP<br />LIST</div>
+      </div>
+
+      <div class="spotlight" id="spotlight"></div>
+
+      <div class="progress-wrap">
+        <div class="progress-bar" id="progressBar"></div>
+      </div>
+
+      <div class="ticker-bar">
+        <span class="ticker-live">LIVE</span>
+        <div class="ticker-scroll">
+          <div id="ticker-content" class="ticker-content"></div>
+        </div>
+      </div>
+    </div>
+
+    <div id="danmaku-layer"></div>
+
+    <script src="/socket.io/socket.io.js"></script>
+    <script src="script.js?v=4"></script>
+  </body>
+</html>
