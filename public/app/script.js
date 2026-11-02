@@ -7671,7 +7671,10 @@ function showMeView(view) {
     el.classList.toggle("hidden", el.id !== `me-view-${view}`);
   });
   if (_ME_TITLES[view]) document.getElementById("me-title").textContent = _ME_TITLES[view];
-  if (view === "theme") _buildThemePicker();
+  if (view === "theme") {
+    _buildSavedThemes();
+    _buildThemePicker();
+  }
   document.getElementById("me-overlay").scrollTop = 0;
 }
 
@@ -7788,6 +7791,78 @@ function adminResetPassword() {
     .catch(() => showAlert("重置失败\nReset failed."));
 }
 
+// 色调：我的配色
+function _buildSavedThemes() {
+  const esc = (x) => String(x).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  const list = savedThemes();
+  document.getElementById("theme-saved").innerHTML = list
+    .map(
+      (t, i) => `
+    <div class="theme-saved-item">
+      <button class="nes-btn theme-swatch${sameColors(t, currentTheme) ? " selected" : ""}" data-i="${i}"
+        onclick="setTheme({ id: 'custom', bg: savedThemes()[this.dataset.i].bg, ink: savedThemes()[this.dataset.i].ink })">
+        <span class="theme-swatch-chip" style="background:${t.bg};color:${t.ink}">Aa</span>
+      </button>
+      <button class="theme-saved-name" data-i="${i}" onclick="openThemeName(Number(this.dataset.i))" aria-label="改名 Rename">
+        <span class="theme-saved-name-text" data-noi18n>${esc(t.name || "")}</span><span class="theme-saved-name-pen">✎</span>
+      </button>
+      <button class="theme-saved-del" data-i="${i}" onclick="onRemoveSavedTheme(this.dataset.i)" aria-label="删除 Delete">✕</button>
+    </div>`,
+    )
+    .join("");
+  document.getElementById("theme-saved-empty").classList.toggle("hidden", list.length > 0);
+}
+
+function onSaveTheme() {
+  const r = canSaveCurrentTheme();
+  if (r === "dup") return showAlert("这个配色已经存过了\nThis palette is already saved.");
+  if (r === "full")
+    return showAlert(`最多存 ${SAVED_THEMES_MAX} 个，先删掉一个吧\nYou can save up to ${SAVED_THEMES_MAX}. Delete one first.`);
+  openThemeName(null);
+}
+
+// 起名弹窗：index = null 是新存，数字是给已存的第几个改名
+let _themeNameIndex = null;
+function _defaultThemeName() {
+  const preset = THEME_PRESETS.find((t) => sameColors(t, currentTheme));
+  if (preset) return currentLang === "en" ? preset.en : preset.zh;
+  const n = savedThemes().length + 1;
+  return currentLang === "en" ? `Palette ${n}` : `配色 ${n}`;
+}
+function openThemeName(index) {
+  _themeNameIndex = index;
+  const t = index === null ? currentTheme : savedThemes()[index];
+  if (!t) return;
+  const chip = document.getElementById("theme-name-chip");
+  chip.style.background = t.bg;
+  chip.style.color = t.ink;
+  document.getElementById("theme-name-title").innerHTML =
+    index === null
+      ? `<span class="zh">给这个配色起个名字</span><span class="en">Name this palette</span>`
+      : `<span class="zh">改个名字</span><span class="en">Rename palette</span>`;
+  const input = document.getElementById("theme-name-input");
+  input.value = index === null ? _defaultThemeName() : t.name || "";
+  document.getElementById("theme-name-overlay").classList.remove("hidden");
+  input.focus();
+  input.select();
+}
+function closeThemeName() {
+  document.getElementById("theme-name-overlay").classList.add("hidden");
+}
+function confirmThemeName() {
+  const name = document.getElementById("theme-name-input").value.trim();
+  if (_themeNameIndex === null) saveCurrentTheme(name || _defaultThemeName());
+  else renameSavedTheme(_themeNameIndex, name);
+  closeThemeName();
+  _buildSavedThemes();
+}
+
+function onRemoveSavedTheme(i) {
+  removeSavedTheme(Number(i));
+  _buildSavedThemes();
+}
+
+// 色调：预设 + 自己调
 function _buildThemePicker() {
   const wrap = document.getElementById("theme-presets");
   wrap.innerHTML = THEME_PRESETS.map(
@@ -7798,15 +7873,26 @@ function _buildThemePicker() {
       <span>${t.zh} ${t.en}</span>
     </button>`,
   ).join("");
+  _syncCustomInputs();
+}
+
+function _syncCustomInputs() {
   document.getElementById("theme-custom-bg").value = currentTheme.bg;
   document.getElementById("theme-custom-ink").value = currentTheme.ink;
 }
 
-// 自定义：改底色时自动配一个合适的墨色；之后还可以单独改墨色
+// 自定义：底色和墨色各改各的，改一个不动另一个
 function onCustomThemeBg(bg) {
-  const ink = suggestInk(bg);
-  document.getElementById("theme-custom-ink").value = ink;
-  setTheme({ id: "custom", bg, ink });
+  setTheme({ id: "custom", bg, ink: document.getElementById("theme-custom-ink").value });
+}
+// 按一下才自动配：按现在的墨色配底色 / 按现在的底色配墨色
+function onAutoBg() {
+  const ink = document.getElementById("theme-custom-ink").value;
+  setTheme({ id: "custom", bg: suggestBg(ink), ink });
+}
+function onAutoInk() {
+  const bg = document.getElementById("theme-custom-bg").value;
+  setTheme({ id: "custom", bg, ink: suggestInk(bg) });
 }
 function onCustomThemeInk(ink) {
   setTheme({ id: "custom", bg: document.getElementById("theme-custom-bg").value, ink });
@@ -7816,6 +7902,13 @@ document.addEventListener("themechange", () => {
   document.querySelectorAll("#theme-presets .theme-swatch").forEach((b) => {
     b.classList.toggle("selected", b.dataset.id === currentTheme.id);
   });
+  const saved = savedThemes();
+  document.querySelectorAll("#theme-saved .theme-swatch").forEach((b) => {
+    const t = saved[b.dataset.i];
+    b.classList.toggle("selected", !!t && sameColors(t, currentTheme));
+  });
+  // 点了预设 / 我的配色，取色框跟着变（自己正在拖的那个不用管，值本来就一样）
+  _syncCustomInputs();
 });
 
 function _applyImpressionToGrid(grid, text) {

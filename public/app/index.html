@@ -41,6 +41,19 @@
       </div>
     </div>
 
+    <!-- 给「我的配色」起名 / 改名 -->
+    <div id="theme-name-overlay" class="custom-alert-overlay hidden">
+      <form class="custom-alert-box theme-name-box" onsubmit="event.preventDefault(); confirmThemeName();">
+        <p id="theme-name-title" class="bi-stack"><span class="zh">给这个配色起个名字</span><span class="en">Name this palette</span></p>
+        <span class="theme-swatch-chip" id="theme-name-chip">Aa</span>
+        <input type="text" id="theme-name-input" class="nes-input" maxlength="12" autocomplete="off" data-noi18n />
+        <div class="theme-name-btns">
+          <button type="button" class="nes-btn" onclick="closeThemeName()">取消 Cancel</button>
+          <button type="submit" class="nes-btn is-primary">确定 OK</button>
+        </div>
+      </form>
+    </div>
+
     <!-- Launch Page -->
     <section id="launch" class="page active">
       <button class="nes-btn lang-toggle" data-noi18n onclick="cycleLang()" aria-label="切换语言 Switch language">中EN</button>
@@ -887,19 +900,34 @@
         <div id="admin-thread" class="admin-thread"></div>
       </div>
 
-      <!-- 色调：预设 + 自定义 -->
+      <!-- 色调：自己调 + 我存下来的配色 + 预设 -->
       <div class="me-view hidden" id="me-view-theme">
-        <div class="theme-grid" id="theme-presets"></div>
-        <div class="theme-custom">
-          <p class="theme-custom-title">自定义 Custom</p>
-          <label class="theme-color-row">
-            <span>底色 Background</span>
-            <input type="color" id="theme-custom-bg" oninput="onCustomThemeBg(this.value)" />
-          </label>
-          <label class="theme-color-row">
-            <span>墨色 Ink</span>
-            <input type="color" id="theme-custom-ink" oninput="onCustomThemeInk(this.value)" />
-          </label>
+        <div class="theme-section">
+          <p class="theme-custom-title">自己调 Custom</p>
+          <div class="theme-color-row">
+            <label for="theme-custom-bg">底色 Background</label>
+            <div class="theme-color-ctrl">
+              <button class="nes-btn theme-auto" onclick="onAutoBg()">自动 Auto</button>
+              <input type="color" id="theme-custom-bg" oninput="onCustomThemeBg(this.value)" />
+            </div>
+          </div>
+          <div class="theme-color-row">
+            <label for="theme-custom-ink">墨色 Ink</label>
+            <div class="theme-color-ctrl">
+              <button class="nes-btn theme-auto" onclick="onAutoInk()">自动 Auto</button>
+              <input type="color" id="theme-custom-ink" oninput="onCustomThemeInk(this.value)" />
+            </div>
+          </div>
+          <button class="nes-btn" onclick="onSaveTheme()">保存到我的配色 Save</button>
+        </div>
+        <div class="theme-section theme-custom">
+          <p class="theme-custom-title">我的配色 My Palettes</p>
+          <div class="theme-grid theme-saved-grid" id="theme-saved"></div>
+          <p class="theme-empty bi-stack hidden" id="theme-saved-empty"><span class="zh">还没有存下的配色，调好颜色后点上面的「保存」</span><span class="en">No saved palettes yet. Pick colors, then tap Save above.</span></p>
+        </div>
+        <div class="theme-section theme-custom">
+          <p class="theme-custom-title">预设 Presets</p>
+          <div class="theme-grid" id="theme-presets"></div>
         </div>
       </div>
     </div>

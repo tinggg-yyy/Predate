@@ -13,6 +13,19 @@ const THEME_PRESETS = [
   { id: "lavender", zh: "薰衣草", en: "Lavender", bg: "#b9b0d0", ink: "#2c2440" },
   { id: "paper", zh: "旧报纸", en: "Newsprint", bg: "#e4dfd2", ink: "#2a2a2a" },
   { id: "night", zh: "夜间", en: "Night", bg: "#23281f", ink: "#c8d4b8" },
+  // 对比跳色：底色和墨色差得很开
+  { id: "lemon", zh: "柠檬紫", en: "Lemon Grape", bg: "#f2e14c", ink: "#3b1f6b" },
+  { id: "mint", zh: "薄荷樱桃", en: "Mint Cherry", bg: "#a6e3c4", ink: "#a3122c" },
+  { id: "tangerine", zh: "橘子海军", en: "Tangerine", bg: "#ff9f4a", ink: "#102a6b" },
+  { id: "bubblegum", zh: "泡泡糖", en: "Bubblegum", bg: "#ffb6d2", ink: "#0f5132" },
+  { id: "sky", zh: "天空橙", en: "Sky Orange", bg: "#93d2f5", ink: "#9a3300" },
+  { id: "lime", zh: "荧光绿", en: "Neon Lime", bg: "#c8f542", ink: "#5a128a" },
+  { id: "tiffany", zh: "蒂芙尼", en: "Tiffany", bg: "#86d8cf", ink: "#7a1f3d" },
+  { id: "tomato", zh: "番茄", en: "Tomato", bg: "#e8463f", ink: "#fff1cf" },
+  { id: "klein", zh: "克莱因蓝", en: "Klein Blue", bg: "#1f3fae", ink: "#ffd23f" },
+  { id: "forest", zh: "墨绿金", en: "Forest Gold", bg: "#1f3d2b", ink: "#e8c55c" },
+  { id: "terminal", zh: "黑客", en: "Terminal", bg: "#0d120d", ink: "#3dff6e" },
+  { id: "cyber", zh: "赛博", en: "Cyber", bg: "#1c0d33", ink: "#ff5ad9" },
 ];
 
 const _hexToRgb = (hex) => {
@@ -48,9 +61,9 @@ function themePalette(bgHex, inkHex) {
   };
 }
 
-// 自定义只选了底色时，自动配一个同色相的墨色（底色浅 → 很深的墨；底色深 → 很浅的墨）
-function suggestInk(bgHex) {
-  const [r, g, b] = _hexToRgb(bgHex).map((v) => v / 255);
+// 「自动」按钮：按一个颜色配另一个同色相的颜色（这个浅 → 配很深的；这个深 → 配很浅的）
+function _hslPartner(hex, darkL, lightL, maxS) {
+  const [r, g, b] = _hexToRgb(hex).map((v) => v / 255);
   const max = Math.max(r, g, b), min = Math.min(r, g, b);
   const l = (max + min) / 2;
   let h = 0, s = 0;
@@ -60,8 +73,8 @@ function suggestInk(bgHex) {
     h = max === r ? (g - b) / d + (g < b ? 6 : 0) : max === g ? (b - r) / d + 2 : (r - g) / d + 4;
     h /= 6;
   }
-  const targetL = l > 0.45 ? 0.15 : 0.82;
-  const targetS = Math.min(s, 0.35);
+  const targetL = l > 0.45 ? darkL : lightL;
+  const targetS = Math.min(s, maxS);
   // HSL → RGB
   const q = targetL < 0.5 ? targetL * (1 + targetS) : targetL + targetS - targetL * targetS;
   const p = 2 * targetL - q;
@@ -74,6 +87,10 @@ function suggestInk(bgHex) {
   };
   return _rgbToHex([hue(h + 1 / 3), hue(h), hue(h - 1 / 3)].map((v) => v * 255));
 }
+// 按底色配墨色：墨色要很深或很浅，颜色淡一点
+const suggestInk = (bgHex) => _hslPartner(bgHex, 0.15, 0.82, 0.35);
+// 按墨色配底色：底色不用那么极端（浅底像原版灰绿那种亮度），可以更鲜艳一点
+const suggestBg = (inkHex) => _hslPartner(inkHex, 0.15, 0.72, 0.45);
 
 // 现在的配色：{ id, bg, ink }（id 是预设名或 "custom"）
 let currentTheme = THEME_PRESETS[0];
@@ -99,6 +116,50 @@ function setTheme(theme) {
   } catch (_) {}
   // 像素图标、头像、画板这些画在 canvas 上的东西，收到这个事件后按新墨色重画
   document.dispatchEvent(new CustomEvent("themechange", { detail: theme }));
+}
+
+// 我的配色：用户自己存下来的 { name, bg, ink }，只存在这个浏览器里，最多 12 个
+const _SAVED_KEY = "predate_theme_saved";
+const SAVED_THEMES_MAX = 12;
+const SAVED_THEME_NAME_MAX = 12;
+function savedThemes() {
+  try {
+    const list = JSON.parse(localStorage.getItem(_SAVED_KEY) || "[]");
+    return Array.isArray(list) ? list.filter((t) => t?.bg && t?.ink) : [];
+  } catch (_) {
+    return [];
+  }
+}
+function _writeSavedThemes(list) {
+  try {
+    localStorage.setItem(_SAVED_KEY, JSON.stringify(list));
+  } catch (_) {}
+}
+const sameColors = (a, b) => a.bg.toLowerCase() === b.bg.toLowerCase() && a.ink.toLowerCase() === b.ink.toLowerCase();
+const _cleanThemeName = (name) => String(name || "").trim().slice(0, SAVED_THEME_NAME_MAX);
+// 现在的配色能不能存：返回 "ok" / "dup"（已经存过）/ "full"
+function canSaveCurrentTheme() {
+  const list = savedThemes();
+  if (list.some((t) => sameColors(t, currentTheme))) return "dup";
+  if (list.length >= SAVED_THEMES_MAX) return "full";
+  return "ok";
+}
+function saveCurrentTheme(name) {
+  if (canSaveCurrentTheme() !== "ok") return;
+  const list = savedThemes();
+  list.push({ name: _cleanThemeName(name), bg: currentTheme.bg, ink: currentTheme.ink });
+  _writeSavedThemes(list);
+}
+function renameSavedTheme(i, name) {
+  const list = savedThemes();
+  if (!list[i]) return;
+  list[i].name = _cleanThemeName(name);
+  _writeSavedThemes(list);
+}
+function removeSavedTheme(i) {
+  const list = savedThemes();
+  list.splice(i, 1);
+  _writeSavedThemes(list);
 }
 
 // 画 canvas 用的墨色 / 底色（画板每一帧每个格子都会调用，按配色缓存，不重复解析）

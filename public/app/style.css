@@ -1,4 +1,4 @@
-/* Font */
+n/* Font */
 @font-face {
   font-family: "Zpix";
   src: url("../fonts/zpix.ttf") format("truetype");
@@ -2560,13 +2560,101 @@ html[data-lang="both"] .ob-title-interactive .en {
   font-weight: bold;
   border: 1px solid rgb(var(--line-rgb) / 0.55);
 }
+/* 我的配色：三列小色块，右上角 ✕ 删除 */
+.theme-saved-grid {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+.theme-saved-item {
+  position: relative;
+  min-width: 0;
+}
+.theme-saved-item .nes-btn.theme-swatch {
+  width: 100%;
+  margin: 0 !important;
+  padding: 6px !important;
+}
+/* 色块下面的名字，点一下改名 */
+.theme-saved-name {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  width: 100%;
+  margin-top: 6px;
+  padding: 0;
+  font-family: inherit;
+  font-size: 11px;
+  color: var(--c-text);
+  background: none;
+  border: none;
+  cursor: pointer;
+}
+.theme-saved-name-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.theme-saved-name-pen {
+  flex-shrink: 0;
+  opacity: 0.6;
+}
+/* 起名弹窗 */
+.theme-name-box {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 12px;
+}
+.theme-name-box p {
+  margin-bottom: 0;
+}
+.theme-name-box .theme-swatch-chip {
+  height: 44px;
+}
+.theme-name-box .nes-input {
+  font-family: inherit;
+  font-size: 14px;
+}
+.theme-name-btns {
+  display: flex;
+  gap: 10px;
+}
+.theme-name-btns .nes-btn {
+  flex: 1;
+  margin: 0 !important;
+  font-size: 12px;
+}
+.theme-saved-del {
+  position: absolute;
+  top: -6px;
+  right: -6px;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  font-size: 10px;
+  line-height: 18px;
+  color: var(--c-bg);
+  background: var(--c-text);
+  border: none;
+  cursor: pointer;
+  z-index: 1;
+}
+.theme-empty {
+  font-size: 11px;
+  opacity: 0.7;
+  margin: 0;
+  line-height: 1.6;
+}
+.theme-section {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+/* 分段之间的虚线 */
 .theme-custom {
   margin-top: 6px;
   padding-top: 12px;
   border-top: 2px dashed rgb(var(--line-rgb) / 0.40);
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
 }
 .theme-custom-title {
   font-size: 12px;
@@ -2578,6 +2666,16 @@ html[data-lang="both"] .ob-title-interactive .en {
   align-items: center;
   justify-content: space-between;
   font-size: 12px;
+}
+.theme-color-ctrl {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.nes-btn.theme-auto {
+  margin: 0 !important;
+  padding: 4px 8px !important;
+  font-size: 11px;
 }
 .theme-color-row input[type="color"] {
   width: 64px;
