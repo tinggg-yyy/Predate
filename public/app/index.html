@@ -6,6 +6,10 @@
       name="viewport"
       content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=0, viewport-fit=cover"
     />
+    <!-- iOS：让页面背景（格子）延伸到刘海/状态栏区域 -->
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="theme-color" content="#a9b0a2" />
     <link rel="manifest" href="../manifest.json" />
     <title>PREDATE</title>
 
@@ -16,10 +20,13 @@
     />
 
     <link rel="stylesheet" href="style.css" />
+    <!-- 配色和语言要在页面内容之前加载，避免先闪一下默认配色 / 双语 -->
+    <script src="theme.js"></script>
+    <script src="i18n.js"></script>
 
     <script src="../lib/p5.js"></script>
     <script src="../lib/p5.sound.js"></script>
-    <script src="/socket.io/socket.io.js"></script>
+    <script src="../socket.io/socket.io.js"></script>
   </head>
   <body>
     <!-- Custom Alert Modal -->
@@ -32,41 +39,55 @@
 
     <!-- Launch Page -->
     <section id="launch" class="page active">
+      <button class="nes-btn lang-toggle" data-noi18n onclick="cycleLang()" aria-label="切换语言 Switch language">中EN</button>
       <div class="phone">
         <h1 class="logo">PREDATE</h1>
-        <p class="subtitle">
-          寻找有缘的那个ta<br> Find your destined one
-        </p>
+        <p class="subtitle bi-stack"><span class="zh">寻找有缘的那个ta</span><span class="en">Find your destined one</span></p>
         <button class="nes-btn" onclick="goTo('login')">开始 START</button>
       </div>
     </section>
 
     <!-- Login / Sign up -->
     <section id="login" class="page">
+      <button class="nes-btn lang-toggle" data-noi18n onclick="cycleLang()" aria-label="切换语言 Switch language">中EN</button>
       <div class="phone">
-        <h2>注册/登录<br>Sign Up/Login</h2>
-        <div class="nes-field">
-          <label for="name_field">用户名 Username</label>
-          <input
-            id="username"
-            class="nes-input"
-            type="text"
-            placeholder="用户名 Username"
-          />
-          <label for="name_field">密码 Password</label>
-          <input
-            id="password"
-            class="nes-input"
-            type="password"
-            placeholder="密码 Password"
-          />
-        </div>
-        <button class="nes-btn" onclick="handleLogin()">进入 Enter</button>
+        <h2 class="bi-stack"><span class="zh">注册/登录</span><span class="en">Sign Up/Login</span></h2>
+        <!-- 用 form + autocomplete：浏览器 / iPhone 钥匙串会提示保存密码，下次自动填好 -->
+        <form id="login-form" class="login-form" autocomplete="on" onsubmit="event.preventDefault(); handleLogin();">
+          <div class="nes-field">
+            <label for="username">用户名 Username</label>
+            <input
+              id="username"
+              name="username"
+              class="nes-input"
+              type="text"
+              autocomplete="username"
+              autocapitalize="off"
+              placeholder="用户名 Username"
+            />
+            <label for="password">密码 Password</label>
+            <div class="pw-wrap">
+              <input
+                id="password"
+                name="password"
+                class="nes-input"
+                type="password"
+                autocomplete="current-password"
+                placeholder="密码 Password"
+              />
+              <!-- 小眼睛：点一下显示/隐藏密码明文 -->
+              <button type="button" id="pw-toggle" class="pw-toggle"
+                onclick="togglePasswordVisible()" aria-label="显示密码 Show password"></button>
+            </div>
+          </div>
+          <button class="nes-btn" type="submit">进入 Enter</button>
+        </form>
       </div>
     </section>
 
     <!-- Profile - Name -->
     <section id="profile-name" class="page setup-page">
+      <button class="nes-btn lang-toggle" data-noi18n onclick="cycleLang()" aria-label="切换语言 Switch language">中EN</button>
       <button class="nes-btn setup-prev-btn" onclick="goTo('login')">◀</button>
       <div class="phone setup-content">
         <div class="nes-field">
@@ -86,6 +107,7 @@
 
     <!-- Profile - Species -->
     <section id="profile-breed" class="page setup-page">
+      <button class="nes-btn lang-toggle" data-noi18n onclick="cycleLang()" aria-label="切换语言 Switch language">中EN</button>
       <button class="nes-btn setup-prev-btn" onclick="goTo('profile-name')">
         ◀
       </button>
@@ -102,8 +124,10 @@
             <option value="两栖类 / Amphibians">两栖类 Amphibians</option>
             <option value="节肢动物 / Arthropods">节肢动物 Arthropods</option>
             <option value="鱼类 / Fish">鱼类 Fish</option>
+            <option value="__custom__">自定义 Custom</option>
           </select>
         </div>
+        <input id="petBreedClass-custom" class="nes-input hidden" type="text" maxlength="20" placeholder="自定义大类（不能有标点）/ Custom class (no punctuation)" />
         <div id="breedSubgroupWrapper" class="hidden">
           <label>细类 Subgroup</label>
           <div class="nes-select">
@@ -113,6 +137,7 @@
               </option>
             </select>
           </div>
+          <input id="petBreedSubgroup-custom" class="nes-input hidden" type="text" maxlength="20" placeholder="自定义细类（不能有标点）/ Custom subgroup (no punctuation)" />
         </div>
         <div id="breedSubSubgroupWrapper" class="hidden">
           <label>子类 Sub-group</label>
@@ -123,16 +148,18 @@
               </option>
             </select>
           </div>
+          <input id="petBreedSubSubgroup-custom" class="nes-input hidden" type="text" maxlength="20" placeholder="自定义子类（不能有标点）/ Custom sub-group (no punctuation)" />
         </div>
         <div id="breedSpecificWrapper" class="hidden">
           <label>物种 Species</label>
           <div class="nes-select">
-            <select id="petBreed" onchange="updateHeightOptions()">
+            <select id="petBreed" onchange="onBreedSpeciesChange()">
               <option value="" disabled selected hidden>
                 选择物种 Select species...
               </option>
             </select>
           </div>
+          <input id="petBreed-custom" class="nes-input hidden" type="text" maxlength="20" placeholder="自定义物种（不能有标点）/ Custom species (no punctuation)" />
         </div>
         <div style="margin-top:14px;">
           <label>
@@ -151,8 +178,10 @@
               <option value="两栖类 / Amphibians">两栖类 Amphibians</option>
               <option value="节肢动物 / Arthropods">节肢动物 Arthropods</option>
               <option value="鱼类 / Fish">鱼类 Fish</option>
+              <option value="__custom__">自定义 Custom</option>
             </select>
           </div>
+          <input id="petBreedClass2-custom" class="nes-input hidden" type="text" maxlength="20" placeholder="自定义大类（不能有标点）/ Custom class (no punctuation)" />
           <div id="breedSubgroupWrapper2" class="hidden">
             <label>细类 Subgroup</label>
             <div class="nes-select">
@@ -160,6 +189,7 @@
                 <option value="" disabled selected hidden>选择细类 Select subgroup...</option>
               </select>
             </div>
+            <input id="petBreedSubgroup2-custom" class="nes-input hidden" type="text" maxlength="20" placeholder="自定义细类（不能有标点）/ Custom subgroup (no punctuation)" />
           </div>
           <div id="breedSubSubgroupWrapper2" class="hidden">
             <label>子类 Sub-group</label>
@@ -168,14 +198,16 @@
                 <option value="" disabled selected hidden>选择子类 Select sub-group...</option>
               </select>
             </div>
+            <input id="petBreedSubSubgroup2-custom" class="nes-input hidden" type="text" maxlength="20" placeholder="自定义子类（不能有标点）/ Custom sub-group (no punctuation)" />
           </div>
           <div id="breedSpecificWrapper2" class="hidden">
             <label>物种 Species</label>
             <div class="nes-select">
-              <select id="petBreed2" onchange="updateHeightOptions2()">
+              <select id="petBreed2" onchange="onBreedSpecies2Change()">
                 <option value="" disabled selected hidden>选择物种 Select species...</option>
               </select>
             </div>
+            <input id="petBreed2-custom" class="nes-input hidden" type="text" maxlength="20" placeholder="自定义物种（不能有标点）/ Custom species (no punctuation)" />
           </div>
         </div>
         <div id="heightWrapper" class="hidden">
@@ -196,34 +228,11 @@
 
     <!-- Profile - Gender -->
     <section id="profile-gender" class="page setup-page">
+      <button class="nes-btn lang-toggle" data-noi18n onclick="cycleLang()" aria-label="切换语言 Switch language">中EN</button>
       <button class="nes-btn setup-prev-btn" onclick="goTo('profile-breed')">
         ◀
       </button>
       <div class="phone setup-content">
-        <label>性别 Gender</label>
-        <div class="nes-select">
-          <select id="petGender">
-            <option value="雄/Male">雄 Male</option>
-            <option value="雌/Female">雌 Female</option>
-            <option value="非二元/Non-binary">非二元 Non-binary</option>
-          </select>
-        </div>
-
-        <label>性取向 Sexual Orientation</label>
-        <div class="nes-select">
-          <select id="petOrientation" onchange="onOrientationChange('petOrientation','orientation-custom')">
-            <option value="" disabled selected hidden>选择 Select...</option>
-            <option value="异性恋/Straight">异性恋 Straight</option>
-            <option value="同性恋/Gay·Lesbian">同性恋 Homosexual</option>
-            <option value="双性恋/Bisexual">双性恋 Bisexual</option>
-            <option value="泛性恋/Pansexual">泛性恋 Pansexual</option>
-            <option value="无性恋/Asexual">无性恋 Asexual</option>
-            <option value="不透露/Prefer not to say">不透露 Prefer not to say</option>
-            <option value="自定义/Custom">自定义 Custom</option>
-          </select>
-        </div>
-        <input id="orientation-custom" class="nes-input hidden" type="text" placeholder="自定义性取向 · Custom orientation..." />
-
         <div class="nes-field">
           <label>出生日期 Birth Date</label>
           <input
@@ -245,39 +254,66 @@
           </div>
 
         </div>
+
+        <label>性别 Gender</label>
+        <div class="nes-select">
+          <select id="petGender" onchange="onOrientationChange('petGender','gender-custom')">
+            <option value="" disabled selected hidden>选性别 / Select Gender...</option>
+            <option value="雄/Male">雄 Male</option>
+            <option value="雌/Female">雌 Female</option>
+            <option value="非二元/Non-binary">非二元 Non-binary</option>
+            <option value="自定义/Custom">自定义 Custom</option>
+          </select>
+        </div>
+        <input id="gender-custom" class="nes-input hidden" type="text" placeholder="自定义性别（不能有标点）/ Custom gender (no punctuation)" />
+
+        <label>性取向 Sexual Orientation</label>
+        <div class="nes-select">
+          <select id="petOrientation" onchange="onOrientationChange('petOrientation','orientation-custom')">
+            <option value="" disabled selected hidden>选择 Select...</option>
+            <option value="异性恋/Straight">异性恋 Straight</option>
+            <option value="同性恋/Gay·Lesbian">同性恋 Gay & Lesbian</option>
+            <option value="双性恋/Bisexual">双性恋 Bisexual</option>
+            <option value="泛性恋/Pansexual">泛性恋 Pansexual</option>
+            <option value="无性恋/Asexual">无性恋 Asexual</option>
+            <option value="不透露/Prefer not to say">不透露 Prefer not to say</option>
+            <option value="自定义/Custom">自定义 Custom</option>
+          </select>
+        </div>
+        <input id="orientation-custom" class="nes-input hidden" type="text" placeholder="自定义性取向（不能有标点）/ Custom orientation (no punctuation)" />
+
       </div>
       <button class="nes-btn setup-next-btn" onclick="validateAndGoTo('profile-gender','profile-housing')">▶</button>
     </section>
 
     <!-- Profile - Housing -->
     <section id="profile-housing" class="page setup-page">
+      <button class="nes-btn lang-toggle" data-noi18n onclick="cycleLang()" aria-label="切换语言 Switch language">中EN</button>
       <button class="nes-btn setup-prev-btn" onclick="goTo('profile-gender')">◀</button>
       <div class="phone setup-content">
-        <label>城市 City</label>
-        <div class="nes-select">
-          <select id="house-province-select" onchange="onProvinceSelectChange('house')">
-          </select>
-        </div>
-        <div class="nes-select hidden" id="house-city-select-wrap">
-          <select id="house-city-select" onchange="onCitySelectChange('house')">
-          </select>
-        </div>
-        <input id="house-city-custom" class="nes-input hidden" type="text" placeholder="输入城市名 · Enter city name" />
+        <!-- 洲 → 国家 → 省/州 → 城市（由 buildCitySelectors 生成） -->
+        <div id="house-geo" class="geo-picker"></div>
 
-        <label>区域 District</label>
-        <div class="dice-field-row">
-          <button class="dice-roll-btn" id="house-district-dice-btn" data-rolls="0"
-            onclick="rollDistrictDice('house')"></button>
-          <div id="house-district-display" class="dice-result-input">—</div>
-          <input id="house-district" type="hidden" value="" />
+        <!-- 选好上一项才出现（见 _updateHouseSteps） -->
+        <div id="house-step-district" class="house-step hidden">
+          <label>区域 District</label>
+          <div class="dice-field-row">
+            <button class="dice-roll-btn" id="house-district-dice-btn" data-rolls="0"
+              onclick="rollDistrictDice('house')"></button>
+            <div id="house-district-display" class="dice-result-input">—</div>
+            <input id="house-district" type="hidden" value="" />
+          </div>
         </div>
 
-        <label>房屋类型 Type</label>
-        <div class="dice-field-row">
-          <button class="dice-roll-btn" id="house-type-dice-btn" data-rolls="0"
-            onclick="rollHousingFieldDice('type','house')"></button>
-          <div id="house-type-display" class="dice-result-input">—</div>
-          <input id="house-type" type="hidden" value="" />
+        <!-- 选好上一项才出现（见 _updateHouseSteps） -->
+        <div id="house-step-type" class="house-step hidden">
+          <label>房屋类型 Type</label>
+          <div class="dice-field-row">
+            <button class="dice-roll-btn" id="house-type-dice-btn" data-rolls="0"
+              onclick="rollHousingFieldDice('type','house')"></button>
+            <div id="house-type-display" class="dice-result-input">—</div>
+            <input id="house-type" type="hidden" value="" />
+          </div>
         </div>
 
         <div id="house-villa-wrapper" class="hidden">
@@ -300,12 +336,15 @@
           </div>
         </div>
 
-        <label>面积 Area</label>
-        <div class="dice-field-row">
-          <button class="dice-roll-btn" id="house-area-dice-btn" data-rolls="0"
-            onclick="rollHousingFieldDice('area','house')"></button>
-          <div id="house-area-display" class="dice-result-input">—</div>
-          <input id="house-area" type="hidden" value="" />
+        <!-- 选好上一项才出现（见 _updateHouseSteps） -->
+        <div id="house-step-area" class="house-step hidden">
+          <label>面积 Area</label>
+          <div class="dice-field-row">
+            <button class="dice-roll-btn" id="house-area-dice-btn" data-rolls="0"
+              onclick="rollHousingFieldDice('area','house')"></button>
+            <div id="house-area-display" class="dice-result-input">—</div>
+            <input id="house-area" type="hidden" value="" />
+          </div>
         </div>
 
         <div id="house-apt-floors-wrapper" class="hidden">
@@ -327,12 +366,15 @@
           </div>
         </div>
 
-        <label>租还是买 Rent or Buy?</label>
-        <div class="dice-field-row">
-          <button class="dice-roll-btn" id="house-tenure-dice-btn" data-rolls="0"
-            onclick="rollHousingFieldDice('tenure','house')"></button>
-          <div id="house-tenure-display" class="dice-result-input">—</div>
-          <input id="house-tenure" type="hidden" value="" />
+        <!-- 选好上一项才出现（见 _updateHouseSteps） -->
+        <div id="house-step-tenure" class="house-step hidden">
+          <label>租还是买 Rent or Buy?</label>
+          <div class="dice-field-row">
+            <button class="dice-roll-btn" id="house-tenure-dice-btn" data-rolls="0"
+              onclick="rollHousingFieldDice('tenure','house')"></button>
+            <div id="house-tenure-display" class="dice-result-input">—</div>
+            <input id="house-tenure" type="hidden" value="" />
+          </div>
         </div>
 
         <div id="house-ownership-section" class="hidden">
@@ -355,8 +397,9 @@
           </div>
         </div>
 
+        <!-- 整页最后一个出现（见 _updateHouseSteps）；租房时标题变成「租金 Rent」 -->
         <div id="house-price-wrapper" class="hidden">
-          <label>房价 Price</label>
+          <label id="house-price-label">房价 Price</label>
           <div class="dice-field-row">
             <button class="dice-roll-btn" id="house-price-dice-btn" data-rolls="0"
               onclick="rollHousingFieldDice('price','house')"></button>
@@ -370,6 +413,7 @@
 
     <!-- Profile - Vehicle -->
     <section id="profile-vehicle" class="page setup-page">
+      <button class="nes-btn lang-toggle" data-noi18n onclick="cycleLang()" aria-label="切换语言 Switch language">中EN</button>
       <button class="nes-btn setup-prev-btn" onclick="goTo('profile-housing')">◀</button>
       <div class="phone setup-content">
         <label>车辆类型 Vehicle Type</label>
@@ -390,12 +434,15 @@
           </div>
         </div>
 
-        <label>车辆数量 Count</label>
-        <div class="dice-field-row">
-          <button class="dice-roll-btn" id="vehicle-count-dice-btn" data-rolls="0"
-            onclick="rollVehicleFieldDice('count')"></button>
-          <div id="vehicle-count-display" class="dice-result-input">—</div>
-          <input id="vehicle-count" type="hidden" value="" />
+        <!-- 车辆页一项项出现（见 _updateVehicleSteps） -->
+        <div id="vehicle-step-count" class="hidden">
+          <label>车辆数量 Count</label>
+          <div class="dice-field-row">
+            <button class="dice-roll-btn" id="vehicle-count-dice-btn" data-rolls="0"
+              onclick="rollVehicleFieldDice('count')"></button>
+            <div id="vehicle-count-display" class="dice-result-input">—</div>
+            <input id="vehicle-count" type="hidden" value="" />
+          </div>
         </div>
 
         <div id="vehicle-price-wrapper" class="hidden">
@@ -413,26 +460,34 @@
 
     <!-- Profile - Sterilized -->
     <section id="profile-sterilized" class="page setup-page">
+      <button class="nes-btn lang-toggle" data-noi18n onclick="cycleLang()" aria-label="切换语言 Switch language">中EN</button>
       <button class="nes-btn setup-prev-btn" onclick="goTo('profile-vehicle')">◀</button>
       <div class="phone setup-content">
 
+        <!-- 婚恋状况页：所有问题一个个出现（见 _updateRelSteps） -->
         <label>婚恋状况 Relationship Status</label>
-        <div class="dice-field-row">
-          <button class="dice-roll-btn" id="petSterilized-dice-btn" data-rolls="0"
-            onclick="rollGenericTierDice('petSterilized-dice-btn','petSterilized-display','petSterilized',HOUSING_TIERS.marriage)"></button>
-          <div id="petSterilized-display" class="dice-result-input">—</div>
-          <input id="petSterilized" type="hidden" value="" />
+        <div class="nes-select">
+          <select id="petSterilized" onchange="onRelStatusChange()">
+            <option value="" disabled selected hidden>选择婚恋状况 / Select status...</option>
+            <option value="单身/Single">单身 Single</option>
+            <option value="恋爱中/Dating">恋爱中 In a Relationship</option>
+            <option value="已婚/Married">已婚 Married</option>
+            <option value="离异/Divorced">离异 Divorced</option>
+          </select>
         </div>
 
-        <label>谈过多少恋爱 Past Relationships</label>
-        <div class="dice-field-row">
-          <button class="dice-roll-btn" id="rel-pastCount-dice-btn" data-rolls="0"
-            onclick="rollGenericTierDice('rel-pastCount-dice-btn','rel-pastCount-display','rel-pastCount',HOUSING_TIERS.pastRelCount,onPastRelRolled)"></button>
-          <div id="rel-pastCount-display" class="dice-result-input">—</div>
-          <input id="rel-pastCount" type="hidden" value="" />
+        <div id="rel-step-past" class="hidden">
+          <label>谈过多少恋爱 Past Relationships</label>
+          <div class="dice-field-row">
+            <button class="dice-roll-btn" id="rel-pastCount-dice-btn" data-rolls="0"
+              onclick="rollGenericTierDice('rel-pastCount-dice-btn','rel-pastCount-display','rel-pastCount',HOUSING_TIERS.pastRelCount)"></button>
+            <div id="rel-pastCount-display" class="dice-result-input">—</div>
+            <input id="rel-pastCount" type="hidden" value="" />
+          </div>
         </div>
 
-        <div id="rel-ex-group" class="hidden">
+        <!-- 谈过恋爱才问前任 -->
+        <div id="rel-step-exContact" class="hidden">
           <label>和前任还有联系吗 Still in Touch w/ Ex?</label>
           <div class="dice-field-row">
             <button class="dice-roll-btn" id="rel-exContact-dice-btn" data-rolls="0"
@@ -440,7 +495,9 @@
             <div id="rel-exContact-display" class="dice-result-input">—</div>
             <input id="rel-exContact" type="hidden" value="" />
           </div>
+        </div>
 
+        <div id="rel-step-stillLoveEx" class="hidden">
           <label>还爱前任吗 Still Love Ex?</label>
           <div class="dice-field-row">
             <button class="dice-roll-btn" id="rel-stillLoveEx-dice-btn" data-rolls="0"
@@ -448,7 +505,9 @@
             <div id="rel-stillLoveEx-display" class="dice-result-input">—</div>
             <input id="rel-stillLoveEx" type="hidden" value="" />
           </div>
+        </div>
 
+        <div id="rel-step-whiteMoon" class="hidden">
           <label>有白月光吗 Have a "One That Got Away"?</label>
           <div class="dice-field-row">
             <button class="dice-roll-btn" id="rel-whiteMoon-dice-btn" data-rolls="0"
@@ -458,76 +517,49 @@
           </div>
         </div>
 
-        <label>有孩子吗 Have Kids?</label>
-        <div class="dice-field-row">
-          <button class="dice-roll-btn" id="rel-kids-dice-btn" data-rolls="0"
-            onclick="rollGenericTierDice('rel-kids-dice-btn','rel-kids-display','rel-kids',HOUSING_TIERS.hasKids)"></button>
-          <div id="rel-kids-display" class="dice-result-input">—</div>
-          <input id="rel-kids" type="hidden" value="" />
-        </div>
-
-        <label>现在有伴侣吗 Current Partner?</label>
-        <div class="dice-field-row">
-          <button class="dice-roll-btn" id="rel-partner-dice-btn" data-rolls="0"
-            onclick="rollGenericTierDice('rel-partner-dice-btn','rel-partner-display','rel-partner',HOUSING_TIERS.currentPartner,onPartnerRolled)"></button>
-          <div id="rel-partner-display" class="dice-result-input">—</div>
-          <input id="rel-partner" type="hidden" value="" />
-        </div>
-
-        <div id="rel-partner-details" class="hidden">
-          <label>有几个伴侣 How Many Partners?</label>
+        <div id="rel-step-kids" class="hidden">
+          <label>有孩子吗 Have Kids?</label>
           <div class="dice-field-row">
-            <button class="dice-roll-btn" id="rel-partnerCount-dice-btn" data-rolls="0"
-              onclick="rollGenericTierDice('rel-partnerCount-dice-btn','rel-partnerCount-display','rel-partnerCount',HOUSING_TIERS.partnerCount)"></button>
-            <div id="rel-partnerCount-display" class="dice-result-input">—</div>
-            <input id="rel-partnerCount" type="hidden" value="" />
-          </div>
-
-          <label>有在国外的伴侣吗 Partner Abroad?</label>
-          <div class="dice-field-row">
-            <button class="dice-roll-btn" id="rel-foreignPartner-dice-btn" data-rolls="0"
-              onclick="rollGenericTierDice('rel-foreignPartner-dice-btn','rel-foreignPartner-display','rel-foreignPartner',HOUSING_TIERS.foreignPartner)"></button>
-            <div id="rel-foreignPartner-display" class="dice-result-input">—</div>
-            <input id="rel-foreignPartner" type="hidden" value="" />
-          </div>
-
-          <label>有在别的省/市的伴侣吗 Long-Distance?</label>
-          <div class="dice-field-row">
-            <button class="dice-roll-btn" id="rel-otherCity-dice-btn" data-rolls="0"
-              onclick="rollGenericTierDice('rel-otherCity-dice-btn','rel-otherCity-display','rel-otherCity',HOUSING_TIERS.otherCityPartner)"></button>
-            <div id="rel-otherCity-display" class="dice-result-input">—</div>
-            <input id="rel-otherCity" type="hidden" value="" />
+            <button class="dice-roll-btn" id="rel-kids-dice-btn" data-rolls="0"
+              onclick="rollGenericTierDice('rel-kids-dice-btn','rel-kids-display','rel-kids',HOUSING_TIERS.hasKids)"></button>
+            <div id="rel-kids-display" class="dice-result-input">—</div>
+            <input id="rel-kids" type="hidden" value="" />
           </div>
         </div>
 
-        <div id="rel-no-partner-details" class="hidden">
-          <label>有暧昧关系吗 Ambiguous Relationships?</label>
+        <div id="rel-step-crush" class="hidden">
+          <label>现在对谁有 Crush 吗 Currently Crushing?</label>
           <div class="dice-field-row">
-            <button class="dice-roll-btn" id="rel-ambiguous-dice-btn" data-rolls="0"
-              onclick="rollGenericTierDice('rel-ambiguous-dice-btn','rel-ambiguous-display','rel-ambiguous',HOUSING_TIERS.ambiguousCount)"></button>
-            <div id="rel-ambiguous-display" class="dice-result-input">—</div>
-            <input id="rel-ambiguous" type="hidden" value="" />
-          </div>
-
-          <label>有 Secret 伴侣吗 Secret Partner?</label>
-          <div class="dice-field-row">
-            <button class="dice-roll-btn" id="rel-secret-dice-btn" data-rolls="0"
-              onclick="rollGenericTierDice('rel-secret-dice-btn','rel-secret-display','rel-secret',HOUSING_TIERS.secretPartner)"></button>
-            <div id="rel-secret-display" class="dice-result-input">—</div>
-            <input id="rel-secret" type="hidden" value="" />
+            <button class="dice-roll-btn" id="rel-crush-dice-btn" data-rolls="0"
+              onclick="rollGenericTierDice('rel-crush-dice-btn','rel-crush-display','rel-crush',HOUSING_TIERS.hasCrush)"></button>
+            <div id="rel-crush-display" class="dice-result-input">—</div>
+            <input id="rel-crush" type="hidden" value="" />
           </div>
         </div>
 
-        <label>现在对谁有 Crush 吗 Currently Crushing?</label>
-        <div class="dice-field-row">
-          <button class="dice-roll-btn" id="rel-crush-dice-btn" data-rolls="0"
-            onclick="rollGenericTierDice('rel-crush-dice-btn','rel-crush-display','rel-crush',HOUSING_TIERS.hasCrush)"></button>
-          <div id="rel-crush-display" class="dice-result-input">—</div>
-          <input id="rel-crush" type="hidden" value="" />
+        <!-- 先摇有几段其他关系，摇出几段下面就出现几个骰子，一段段摇具体是哪种关系 -->
+        <div id="rel-step-shipCount" class="hidden">
+          <label>还有几段其他关系 How Many Other "-ships"?</label>
+          <div class="dice-field-row">
+            <button class="dice-roll-btn" id="rel-shipCount-dice-btn" data-rolls="0"
+              onclick="rollGenericTierDice('rel-shipCount-dice-btn','rel-shipCount-display','rel-shipCount',HOUSING_TIERS.shipCount,onShipCountRolled)"></button>
+            <div id="rel-shipCount-display" class="dice-result-input">—</div>
+            <input id="rel-shipCount" type="hidden" value="" />
+          </div>
         </div>
+        <div id="rel-ships-list"></div>
+        <input id="rel-ships" type="hidden" value="" />
+      </div>
+      <button class="nes-btn setup-next-btn" onclick="validateAndGoTo('profile-sterilized','profile-intent')">▶</button>
+    </section>
 
-        <label style="font-weight:bold;margin-top:14px;display:block;">交友意向 Dating Intentions</label>
-        <label style="font-size:11px;opacity:0.7;">来 App 的原因 Why You're Here</label>
+    <!-- Profile - Dating Intentions（从婚恋状况页拆出来的单独一页） -->
+    <section id="profile-intent" class="page setup-page">
+      <button class="nes-btn lang-toggle" data-noi18n onclick="cycleLang()" aria-label="切换语言 Switch language">中EN</button>
+      <button class="nes-btn setup-prev-btn" onclick="goTo('profile-sterilized')">◀</button>
+      <div class="phone setup-content">
+        <label style="font-weight:bold;display:block;">交友意向 Dating Intentions</label>
+        <label>来 App 的原因 Why You're Here</label>
         <div class="dice-field-row">
           <button class="dice-roll-btn" id="rel-purpose-dice-btn" data-rolls="0"
             onclick="rollGenericTierDice('rel-purpose-dice-btn','rel-purpose-display','rel-purpose',HOUSING_TIERS.datingPurpose)"></button>
@@ -535,21 +567,21 @@
           <input id="rel-purpose" type="hidden" value="" />
         </div>
 
-        <label style="font-size:11px;opacity:0.7;">想发展的关系 Relationship Goal</label>
+        <label>想发展的关系 Relationship Goal</label>
         <div class="dice-field-row">
           <button class="dice-roll-btn" id="rel-goal-dice-btn" data-rolls="0"
             onclick="rollGenericTierDice('rel-goal-dice-btn','rel-goal-display','rel-goal',HOUSING_TIERS.relationshipGoal)"></button>
           <div id="rel-goal-display" class="dice-result-input">—</div>
           <input id="rel-goal" type="hidden" value="" />
         </div>
-
       </div>
-      <button class="nes-btn setup-next-btn" onclick="validateAndGoTo('profile-sterilized','profile-parents')">▶</button>
+      <button class="nes-btn setup-next-btn" onclick="validateAndGoTo('profile-intent','profile-parents')">▶</button>
     </section>
 
     <!-- Profile - Parents -->
     <section id="profile-parents" class="page setup-page">
-      <button class="nes-btn setup-prev-btn" onclick="goTo('profile-sterilized')">◀</button>
+      <button class="nes-btn lang-toggle" data-noi18n onclick="cycleLang()" aria-label="切换语言 Switch language">中EN</button>
+      <button class="nes-btn setup-prev-btn" onclick="goTo('profile-intent')">◀</button>
       <div class="phone setup-content">
         <label>父母健在状况 Parents Status</label>
         <div class="dice-field-row">
@@ -561,28 +593,14 @@
 
         <div id="parents-father-wrapper" class="hidden">
           <label>父亲来自 Father's Origin</label>
-          <div class="nes-select">
-            <select id="parents-father-province-select" onchange="onProvinceSelectChange('parents-father')">
-            </select>
-          </div>
-          <div class="nes-select hidden" id="parents-father-city-select-wrap">
-            <select id="parents-father-city-select" onchange="onCitySelectChange('parents-father')">
-            </select>
-          </div>
-          <input id="parents-father-city-custom" class="nes-input hidden" type="text" placeholder="输入城市名 · Enter city name" />
+          <!-- 洲 → 国家 → 省/州 → 城市（由 buildCitySelectors 生成） -->
+          <div id="parents-father-geo" class="geo-picker"></div>
         </div>
 
         <div id="parents-mother-wrapper" class="hidden">
           <label>母亲来自 Mother's Origin</label>
-          <div class="nes-select">
-            <select id="parents-mother-province-select" onchange="onProvinceSelectChange('parents-mother')">
-            </select>
-          </div>
-          <div class="nes-select hidden" id="parents-mother-city-select-wrap">
-            <select id="parents-mother-city-select" onchange="onCitySelectChange('parents-mother')">
-            </select>
-          </div>
-          <input id="parents-mother-city-custom" class="nes-input hidden" type="text" placeholder="输入城市名 · Enter city name" />
+          <!-- 洲 → 国家 → 省/州 → 城市（由 buildCitySelectors 生成） -->
+          <div id="parents-mother-geo" class="geo-picker"></div>
         </div>
 
         <div id="parents-rel-wrapper" class="hidden">
@@ -618,6 +636,7 @@
 
     <!-- Profile - MBTI -->
     <section id="profile-mbti" class="page setup-page">
+      <button class="nes-btn lang-toggle" data-noi18n onclick="cycleLang()" aria-label="切换语言 Switch language">中EN</button>
       <button class="nes-btn setup-prev-btn" onclick="goTo('profile-parents')">◀</button>
       <div class="phone setup-content">
         <label>MBTI类型 MBTI Type</label>
@@ -628,7 +647,7 @@
             <span class="mbti-opt-label">外向 Extrovert</span>
             <button class="mbti-opt-btn" id="petMbti1-I" onclick="selectMbtiChar('petMbti1','I')">I</button>
             <span class="mbti-opt-label">内向 Introvert</span>
-            <button class="mbti-opt-btn mbti-custom-btn" onclick="toggleMbtiPicker('petMbti1')">自定义 ✎</button>
+            <button class="mbti-opt-btn mbti-custom-btn" onclick="toggleMbtiPicker('petMbti1', event)"><span class="zh">自定义</span><span class="en">Custom</span></button>
           </div>
           <div id="petMbti1-display" class="dice-result-input">—</div>
           <input id="petMbti1" type="hidden" value="" />
@@ -641,7 +660,7 @@
             <span class="mbti-opt-label">感觉 Sensing</span>
             <button class="mbti-opt-btn" id="petMbti2-N" onclick="selectMbtiChar('petMbti2','N')">N</button>
             <span class="mbti-opt-label">直觉 iNtuition</span>
-            <button class="mbti-opt-btn mbti-custom-btn" onclick="toggleMbtiPicker('petMbti2')">自定义 ✎</button>
+            <button class="mbti-opt-btn mbti-custom-btn" onclick="toggleMbtiPicker('petMbti2', event)"><span class="zh">自定义</span><span class="en">Custom</span></button>
           </div>
           <div id="petMbti2-display" class="dice-result-input">—</div>
           <input id="petMbti2" type="hidden" value="" />
@@ -654,7 +673,7 @@
             <span class="mbti-opt-label">思考 Thinking</span>
             <button class="mbti-opt-btn" id="petMbti3-F" onclick="selectMbtiChar('petMbti3','F')">F</button>
             <span class="mbti-opt-label">情感 Feeling</span>
-            <button class="mbti-opt-btn mbti-custom-btn" onclick="toggleMbtiPicker('petMbti3')">自定义 ✎</button>
+            <button class="mbti-opt-btn mbti-custom-btn" onclick="toggleMbtiPicker('petMbti3', event)"><span class="zh">自定义</span><span class="en">Custom</span></button>
           </div>
           <div id="petMbti3-display" class="dice-result-input">—</div>
           <input id="petMbti3" type="hidden" value="" />
@@ -667,7 +686,7 @@
             <span class="mbti-opt-label">判断 Judging</span>
             <button class="mbti-opt-btn" id="petMbti4-P" onclick="selectMbtiChar('petMbti4','P')">P</button>
             <span class="mbti-opt-label">知觉 Perceiving</span>
-            <button class="mbti-opt-btn mbti-custom-btn" onclick="toggleMbtiPicker('petMbti4')">自定义 ✎</button>
+            <button class="mbti-opt-btn mbti-custom-btn" onclick="toggleMbtiPicker('petMbti4', event)"><span class="zh">自定义</span><span class="en">Custom</span></button>
           </div>
           <div id="petMbti4-display" class="dice-result-input">—</div>
           <input id="petMbti4" type="hidden" value="" />
@@ -679,6 +698,7 @@
 
     <!-- Profile - Education & Occupation -->
     <section id="profile-edu" class="page setup-page">
+      <button class="nes-btn lang-toggle" data-noi18n onclick="cycleLang()" aria-label="切换语言 Switch language">中EN</button>
       <button class="nes-btn setup-prev-btn" onclick="goTo('profile-mbti')">◀</button>
       <div class="phone setup-content">
         <label>学历 Education</label>
@@ -708,13 +728,15 @@
 
     <!-- Profile - Hobbies -->
     <section id="profile-hobbies" class="page setup-page">
+      <button class="nes-btn lang-toggle" data-noi18n onclick="cycleLang()" aria-label="切换语言 Switch language">中EN</button>
       <button class="nes-btn setup-prev-btn" onclick="goTo('profile-edu')">◀</button>
       <div class="phone setup-content">
         <label>兴趣爱好 Hobbies</label>
         <p class="hobby-hint">可多选 Pick any that fit</p>
         <div class="hobby-tags-wrap" id="hobby-tags"></div>
+        <!-- 自定义输入框和加号在最下面（页面底部给 ▶ 留了位置，不会被挡住） -->
         <div class="hobby-custom-row">
-          <input id="hobby-custom-input" class="nes-input" type="text" placeholder="自定义爱好 · Custom..."
+          <input id="hobby-custom-input" class="nes-input" type="text" placeholder="自定义爱好（不能有标点）/ Custom (no punctuation)"
             onkeydown="if(event.key==='Enter')addCustomHobbyTag('hobby-tags','hobby-custom-input')" />
           <button class="nes-btn" onclick="addCustomHobbyTag('hobby-tags','hobby-custom-input')">+</button>
         </div>
@@ -724,10 +746,11 @@
 
     <!-- Profile - Mate Standards -->
     <section id="profile-standards" class="page setup-page">
+      <button class="nes-btn lang-toggle" data-noi18n onclick="cycleLang()" aria-label="切换语言 Switch language">中EN</button>
       <button class="nes-btn setup-prev-btn" onclick="goTo('profile-hobbies')">◀</button>
       <div class="phone setup-content">
         <label>择偶标准 Mate Standards</label>
-        <p class="hobby-hint">可多选 · 不选也没关系 Pick any that apply</p>
+        <p class="hobby-hint">可多选，不选也没关系 Pick any, or none</p>
         <div class="hobby-tags-wrap" id="standards-tags"></div>
       </div>
       <button class="nes-btn setup-next-btn" onclick="goTo('profile-photo')">▶</button>
@@ -735,11 +758,12 @@
 
     <!-- Profile - Fursona -->
     <section id="profile-photo" class="page setup-page">
+      <button class="nes-btn lang-toggle" data-noi18n onclick="cycleLang()" aria-label="切换语言 Switch language">中EN</button>
       <button class="nes-btn setup-prev-btn" onclick="goTo('profile-standards')">
         ◀
       </button>
       <div class="phone setup-content">
-        <h1>创造你的兽人形象<br>Create Your Fursona</h1>
+        <h2 class="bi-stack"><span class="zh">创造你的兽人形象</span><span class="en">Create Your Fursona</span></h2>
         <div class="main-wrapper">
           <!-- the following div will contain the p5 canvas. -->
           <section class="pixeldraw">
@@ -762,23 +786,23 @@
                   id="text-input"
                   class="nes-input"
                   type="text"
-                  placeholder="给自己一个词 · one word that is you"
+                  placeholder="给自己一个词 / one word that is you"
                 />
               </div>
             </div>
           </section>
         </div>
+        <button class="nes-btn setup-next-btn" onclick="validateAndCreateCard()">
+          生成档案卡 Create Card ▶
+        </button>
       </div>
-      <button class="nes-btn setup-next-btn" onclick="validateAndCreateCard()">
-        生成档案卡 Create Card ▶
-      </button>
     </section>
 
     <!-- Profile Card -->
     <section id="card" class="page">
       <div class="phone">
-        <div class="scroll">
-          <div id="petCard" class="card"></div>
+        <div class="scroll card-frame">
+          <div id="petCard"></div>
         </div>
         <button class="nes-btn" onclick="createSwipeCard()" style="flex-shrink:0;margin-top:10px;">
           进入配对 Start Matching!
@@ -790,14 +814,13 @@
     <section id="swipe-page" class="page">
       <div class="phone">
         <div id="swipe-topbar">
-          <button class="nes-btn" onclick="goToMyProfile()">
-            我的档案 My Profile
-          </button>
+          <button class="nes-btn" onclick="openMePage()">我 Me</button>
+          <button class="nes-btn" id="rank-btn" onclick="openRanking()" aria-label="排行榜 Ranking"></button>
           <button class="nes-btn" id="msg-notif-btn" onclick="openMessages()">
             💬 <span id="msg-notif-count" class="notif-badge hidden">0</span>
           </button>
         </div>
-        <div class="scroll">
+        <div class="scroll card-frame">
           <div id="swipe-container"></div>
         </div>
       </div>
@@ -809,10 +832,91 @@
       </div>
     </section>
 
+    <!-- 「我」：菜单 → 我的档案 / 语言 / 色调 -->
+    <div id="me-overlay" class="hidden">
+      <button class="nes-btn setup-prev-btn" onclick="meBack()">◀</button>
+      <h2 class="me-title" id="me-title">我 Me</h2>
+
+      <!-- 菜单 -->
+      <div class="me-view" id="me-view-menu">
+        <button class="nes-btn me-row" onclick="goToMyProfile()">
+          <span>我的档案 My Profile</span><span class="me-row-arrow">▶</span>
+        </button>
+        <button class="nes-btn me-row" onclick="showMeView('lang')">
+          <span>语言 Language</span><span class="me-row-arrow">▶</span>
+        </button>
+        <button class="nes-btn me-row" onclick="showMeView('theme')">
+          <span>色调 Theme</span><span class="me-row-arrow">▶</span>
+        </button>
+        <!-- 只有管理员（创作者）看得到 -->
+        <button class="nes-btn me-row hidden" id="me-admin-row" onclick="openAdmin()">
+          <span>后台 Admin</span><span class="me-row-arrow">▶</span>
+        </button>
+        <button class="nes-btn me-row me-logout" onclick="logout()">
+          <span>登出 Log Out</span>
+        </button>
+      </div>
+
+      <!-- 语言 -->
+      <div class="me-view hidden" id="me-view-lang">
+        <button class="nes-btn me-option" data-lang-option="zh" data-noi18n onclick="setLang('zh')">中文</button>
+        <button class="nes-btn me-option" data-lang-option="en" data-noi18n onclick="setLang('en')">English</button>
+        <button class="nes-btn me-option" data-lang-option="both" data-noi18n onclick="setLang('both')">中文 + English</button>
+      </div>
+
+      <!-- 后台：所有用户 → 某个人（档案 + 私信 + 重置密码）→ 某段对话 -->
+      <div class="me-view hidden" id="me-view-admin">
+        <input id="admin-search" class="nes-input" type="text" placeholder="搜索名字或用户名 / Search name or username" oninput="_renderAdminUsers()" />
+        <div id="admin-users" class="admin-list"></div>
+      </div>
+      <div class="me-view hidden" id="me-view-adminUser">
+        <div class="admin-reset">
+          <input id="admin-new-pw" class="nes-input" type="text" autocomplete="off" placeholder="新密码 / New password" />
+          <button class="nes-btn" onclick="adminResetPassword()">重置密码 Reset</button>
+        </div>
+        <p class="admin-section-title">私信 Messages</p>
+        <div id="admin-convos" class="admin-list"></div>
+        <p class="admin-section-title">档案 Profile</p>
+        <div class="card-frame admin-card"><div id="admin-user-card"></div></div>
+      </div>
+      <div class="me-view hidden" id="me-view-adminConvo">
+        <div id="admin-thread" class="admin-thread"></div>
+      </div>
+
+      <!-- 色调：预设 + 自定义 -->
+      <div class="me-view hidden" id="me-view-theme">
+        <div class="theme-grid" id="theme-presets"></div>
+        <div class="theme-custom">
+          <p class="theme-custom-title">自定义 Custom</p>
+          <label class="theme-color-row">
+            <span>底色 Background</span>
+            <input type="color" id="theme-custom-bg" oninput="onCustomThemeBg(this.value)" />
+          </label>
+          <label class="theme-color-row">
+            <span>墨色 Ink</span>
+            <input type="color" id="theme-custom-ink" oninput="onCustomThemeInk(this.value)" />
+          </label>
+        </div>
+      </div>
+    </div>
+
+    <!-- 排行榜（和大屏 web 同一个榜单）：先看前十名列表，点进去纯欣赏档案，不能喜欢 / 评价 / 跳过 -->
+    <div id="rank-overlay" class="hidden">
+      <button class="nes-btn setup-prev-btn" onclick="rankBack()">◀</button>
+      <h2 class="me-title bi-stack" id="rank-title"><span class="zh">必吃榜</span><span class="en">Must Eat List</span></h2>
+      <h2 class="me-title hidden" id="rank-detail-title"></h2>
+      <div id="rank-list" class="rank-list"></div>
+      <div id="rank-detail" class="rank-detail hidden">
+        <div class="scroll card-frame">
+          <div id="rank-detail-body"></div>
+        </div>
+      </div>
+    </div>
+
     <!-- My Profile Edit Overlay -->
     <div id="profile-edit" class="hidden">
       <div class="edit-overlay-inner">
-        <div class="scroll">
+        <div class="scroll card-frame">
           <div id="my-profile-card-body"></div>
         </div>
         <button class="nes-btn" onclick="closeMyProfile()">返回 Back</button>
@@ -864,7 +968,7 @@
             <button class="msg-reply-btn" onclick="closeConvoView()">
               ← 返回 Back
             </button>
-            <span id="convo-with-name" class="convo-name-link" onclick="viewConvoProfile()"></span>
+            <span id="convo-with-name" class="convo-name-link" data-noi18n onclick="viewConvoProfile()"></span>
           </div>
           <div id="convo-bubbles" class="convo-bubbles scroll"></div>
           <div class="convo-input-row">
@@ -885,14 +989,14 @@
     <!-- Like Opener Belt Modal -->
     <div id="like-opener-popup" class="hidden">
       <div class="opener-modal">
-        <p class="opener-modal-title">选一句开场白<br>Pick an opener</p>
+        <p class="opener-modal-title bi-stack"><span class="zh">选一句开场白</span><span class="en">Pick an opener</span></p>
         <div class="opener-belt-outer" id="opener-belt-outer"></div>
         <div class="opener-selected-display" id="opener-selected-display">
-          <span id="opener-selected-text">— 点击上方选择 Click to select —</span>
+          <span id="opener-selected-text">点击上方选择 Click to select</span>
         </div>
         <div class="opener-modal-btn-row">
-          <button class="nes-btn is-primary" onclick="submitLikeOpener()">发送 ✉️</button>
-          <button class="nes-btn" onclick="closeLikeOpenerPopup()">取消</button>
+          <button class="nes-btn is-primary" onclick="submitLikeOpener()">发送 Send</button>
+          <button class="nes-btn" onclick="closeLikeOpenerPopup()">取消 Cancel</button>
         </div>
       </div>
     </div>
@@ -900,7 +1004,7 @@
     <!-- Custom Hobby Category Picker -->
     <div id="hobby-cat-picker" class="hidden">
       <div class="hobby-cat-picker-box">
-        <p class="hobby-cat-picker-title">选择分类<br>Choose Category</p>
+        <p class="hobby-cat-picker-title bi-stack"><span class="zh">选择分类</span><span class="en">Choose Category</span></p>
         <div id="hobby-cat-picker-list" class="hobby-cat-picker-list"></div>
         <button class="nes-btn" onclick="closeHobbyCatPicker()" style="margin-top:6px">取消 Cancel</button>
       </div>
@@ -910,7 +1014,7 @@
     <div id="reason-popup" class="hidden">
       <div class="reason-box">
         <p id="reason-popup-title">选择原因 Select Reason</p>
-        <p class="reason-hint">选一个标签作为理由<br>Pick a label</p>
+        <p class="reason-hint bi-stack"><span class="zh">选一个标签作为理由</span><span class="en">Pick a label</span></p>
         <div id="reason-labels" class="reason-labels"></div>
         <input
           id="reason-input"
@@ -931,12 +1035,12 @@
     <div id="swipe-impression-popup" class="hidden">
       <div class="interpret-box">
         <p>留下你的印象 Your Impression</p>
-        <p style="font-size:11px; opacity:0.6; margin: -4px 0 6px;">你的看法会刻入它的形象<br>your words will become part of them</p>
+        <p style="font-size:11px; opacity:0.6; margin: -4px 0 6px;" class="bi-stack"><span class="zh">你的看法会刻入它的形象</span><span class="en">your words will become part of them</span></p>
         <input
           id="swipe-impression-input"
           class="nes-input"
           type="text"
-          placeholder="输入印象 · Enter impression..."
+          placeholder="输入印象 / Enter impression..."
         />
         <div class="interpret-btn-row">
           <button class="nes-btn is-success" onclick="submitSwipeImpression()">
@@ -955,7 +1059,7 @@
           id="swipe-sendmsg-input"
           class="nes-input"
           type="text"
-          placeholder="输入消息 · Type message..."
+          placeholder="输入消息 / Type message..."
         />
         <div class="interpret-btn-row">
           <button class="nes-btn is-primary" onclick="submitSwipeSendMsg()">
@@ -982,14 +1086,14 @@
           id="interpret-input"
           class="nes-input"
           type="text"
-          placeholder="Interpret!"
+          placeholder="写下你的解读 Interpret!"
         />
         <div class="interpret-btn-row">
           <button class="nes-btn is-success" onclick="submitInterpretation()">
-            确定
+            确定 OK
           </button>
           <button class="nes-btn" onclick="closeInterpPopup()">
-            取消
+            取消 Cancel
           </button>
         </div>
       </div>
@@ -1014,10 +1118,10 @@
       <div class="ob-step active" id="ob-step-1">
         <div class="ob-step-inner">
           <p class="ob-progress">01 / 03</p>
-          <span class="ob-title-interactive" id="ob-demo-long">长按</span>
-          <p class="ob-title-en">hold => how you interpret this?</p>
+          <span class="ob-title-interactive" id="ob-demo-long"><span class="zh">长按</span><span class="en">HOLD</span></span>
+          <p class="ob-title-en bi-stack"><span class="zh">长按，说说你怎么理解它</span><span class="en">hold => how you interpret this?</span></p>
           <div class="ob-input-wrap hidden" id="ob-1-input">
-            <input id="ob-1-text" class="nes-input ob-nes-input" type="text" placeholder="mean一下它 please be mean" maxlength="6" />
+            <input id="ob-1-text" class="nes-input ob-nes-input" type="text" placeholder="mean一下它 / please be mean" maxlength="6" />
             <button class="nes-btn ob-submit-btn" onclick="submitOb1()">确定 OK</button>
           </div>
         </div>
@@ -1028,13 +1132,13 @@
         <div class="ob-step-inner">
           <p class="ob-progress">02 / 03</p>
           <!-- Red floating word appears here (above title) after short press -->
-          <span class="ob-float-word hidden" id="ob-float-word"></span>
+          <span class="ob-float-word hidden" id="ob-float-word" data-noi18n></span>
           <!-- Interactive title to short-press -->
-          <span class="ob-title-interactive" id="ob-demo-short">短按</span>
-          <p class="ob-title-en" id="ob-2-sub">短按来看看别人怎么mean的 <br> tap to reveal others' opinions</p>
+          <span class="ob-title-interactive" id="ob-demo-short"><span class="zh">短按</span><span class="en">TAP</span></span>
+          <p class="ob-title-en bi-stack" id="ob-2-sub"><span class="zh">短按来看看别人怎么mean的</span><span class="en">tap to reveal others' opinions</span></p>
           <!-- Agree hint (hidden until float word appears) -->
           <div class="ob-agree-instr hidden" id="ob-agree-instr">
-            <p class="ob-agree-sub">赞同？继续点红字 <br> Agree? Keep Tapping</p>
+            <p class="ob-agree-sub bi-stack"><span class="zh">赞同？继续点红字</span><span class="en">Agree? Keep Tapping</span></p>
             <p class="ob-agree-tally">×<span id="ob-agree-left">3</span></p>
           </div>
         </div>
@@ -1046,17 +1150,19 @@
         <div class="ob-step-inner">
           <p class="ob-progress">03 / 03</p>
           <img id="ob-avatar-img" class="ob-avatar-img" src="" alt="avatar" />
-          <span class="ob-title-interactive" id="ob-3-trigger">印象</span>
-          <p class="ob-title-en">tap to leave an impression</p>
+          <span class="ob-title-interactive" id="ob-3-trigger"><span class="zh">印象</span><span class="en">IMPRESS</span></span>
+          <p class="ob-title-en bi-stack"><span class="zh">点一下，留下你的印象</span><span class="en">tap to leave an impression</span></p>
           <div class="ob-input-wrap hidden" id="ob-3-input">
-            <input id="ob-3-text" class="nes-input ob-nes-input" type="text" placeholder="一个词定义它  one word to define them" maxlength="6" />
+            <input id="ob-3-text" class="nes-input ob-nes-input" type="text" placeholder="一个词定义它 / one word to define them" maxlength="6" />
             <button class="nes-btn ob-submit-btn" id="ob-3-btn" onclick="submitOb3()">刻下 Carve it</button>
           </div>
         </div>
       </div>
     </div>
 
+    <script src="geo-data.js"></script>
+    <script src="../shared/card-data.js"></script>
     <script src="sketch.js"></script>
-    <script src="script.js?v=4"></script>
+    <script src="script.js"></script>
   </body>
 </html>

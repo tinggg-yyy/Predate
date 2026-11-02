@@ -3,3 +3,7 @@ node_modules/
 profiles.json
 messages.json
 .DS_Store
+profiles.backup-*.json
+custom-hobbies.backup-*.json
+sessions.json
+admin.json

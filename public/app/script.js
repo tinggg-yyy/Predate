@@ -1,5 +1,153 @@
 let currentUser = null;
 
+// ── 登录状态：服务器发的令牌存在浏览器里，下次打开自动登录（不存密码）──
+const _SESSION_KEY = "predate_session";
+let _authToken = null;
+try {
+  _authToken = JSON.parse(localStorage.getItem(_SESSION_KEY) || "null")?.token || null;
+} catch (_) {}
+
+function _saveSession(token) {
+  _authToken = token;
+  try {
+    localStorage.setItem(_SESSION_KEY, JSON.stringify({ token }));
+  } catch (_) {}
+}
+function _clearSession() {
+  _authToken = null;
+  try {
+    localStorage.removeItem(_SESSION_KEY);
+  } catch (_) {}
+}
+
+// 所有请求都走这里：自动带上令牌。令牌失效（401）时提示重新登录
+let _authExpiredShown = false;
+function api(url, opts = {}) {
+  const headers = { ...(opts.headers || {}) };
+  if (_authToken) headers.Authorization = `Bearer ${_authToken}`;
+  return fetch(url.startsWith("/") ? PREDATE_BASE + url : url, { ...opts, headers }).then((res) => {
+    if (res.status === 401 && !/^\/(login|me)\b/.test(url) && currentUser && !_authExpiredShown) {
+      _authExpiredShown = true;
+      _clearSession();
+      showAlert("登录已过期，请重新登录\nYour session expired, please log in again.");
+      goTo("login");
+    }
+    return res;
+  });
+}
+
+// 登录 / 注册成功：令牌存起来，其余是自己的档案
+function _acceptLogin(data) {
+  const { token, ...profile } = data;
+  if (token) _saveSession(token);
+  _authExpiredShown = false;
+  currentUser = profile;
+}
+
+// 登录后进入浏览页（老用户跳过教学）
+function _enterAfterLogin() {
+  checkNotifications();
+  startMessagePolling();
+  createSwipeCard({ skipOnboarding: true });
+}
+
+// 打开 app 时：浏览器记着令牌就直接登录
+function _tryAutoLogin() {
+  if (!_authToken) return;
+  api("/me")
+    .then((r) => (r.ok ? r.json() : null))
+    .then((data) => {
+      if (!data) return _clearSession();
+      _acceptLogin(data);
+      _enterAfterLogin();
+    })
+    .catch(() => {});
+}
+
+// 登出：令牌作废，回到开始页（语言、配色这些本机设置保留）
+function logout() {
+  api("/logout", { method: "POST" })
+    .catch(() => {})
+    .finally(() => {
+      _clearSession();
+      location.reload();
+    });
+}
+
+// ── 真实屏幕高度 ──
+// iOS 主屏幕模式 + 透明状态栏时，innerHeight / 100dvh 会少一个刘海高度，
+// 所以 standalone 下直接用屏幕高度，写进 CSS 变量 --app-h
+function _setAppHeight() {
+  const standalone =
+    window.navigator.standalone ||
+    window.matchMedia("(display-mode: standalone)").matches;
+  const landscape = window.innerWidth > window.innerHeight;
+  const screenH = landscape
+    ? Math.min(screen.width, screen.height)
+    : Math.max(screen.width, screen.height);
+  const h = standalone ? Math.max(screenH, window.innerHeight) : window.innerHeight;
+  document.documentElement.style.setProperty("--app-h", h + "px");
+
+  // 刘海高度：env(safe-area-inset-top) 在部分 iOS 主屏幕模式下读出来是 0，
+  // 这时用「屏幕高度 - innerHeight」（正好是被少算的状态栏高度）兜底
+  const probe = document.createElement("div");
+  probe.style.cssText =
+    "position:fixed;top:0;height:env(safe-area-inset-top,0px);visibility:hidden;pointer-events:none;";
+  document.documentElement.appendChild(probe);
+  const envTop = probe.getBoundingClientRect().height;
+  probe.remove();
+  const gap = standalone ? Math.max(0, screenH - window.innerHeight) : 0;
+  let safeTop = Math.max(envTop, landscape ? 0 : gap);
+  // 两种都读不到时，按 iPhone 屏幕尺寸查状态栏高度
+  if (!safeTop && standalone && !landscape) {
+    const w = Math.min(screen.width, screen.height);
+    const table = {
+      "375x812": 44, "414x896": 48, "390x844": 47, "428x926": 47,
+      "393x852": 59, "430x932": 59, "402x874": 62, "440x956": 62,
+    };
+    safeTop = table[`${w}x${screenH}`] || 0;
+  }
+  // 取 4 的倍数（格子间距 4px），刘海区和各层背景的格子才能严丝合缝对齐
+  safeTop = Math.ceil(safeTop / 4) * 4;
+  document.documentElement.style.setProperty("--safe-top", safeTop + "px");
+}
+_setAppHeight();
+window.addEventListener("resize", _setAppHeight);
+
+// ── 自定义标签：不能有标点符号 ──
+// 只保留文字（中英文等）、数字和空格；标点、符号、表情都去掉
+function _stripPunct(str) {
+  return String(str ?? "").replace(/[^\p{L}\p{N}\s]/gu, "").replace(/\s{2,}/g, " ");
+}
+
+const _NO_PUNCT_INPUT_IDS = [
+  "orientation-custom",
+  "gender-custom",
+  // 城市的自定义输入是 buildCitySelectors 动态生成的，在那里单独接上过滤
+  "hobby-custom-input",
+  // 种族每一级的自定义输入（主物种 + 混血第二物种）
+  ...["", "2"].flatMap((s) =>
+    ["petBreedClass", "petBreedSubgroup", "petBreedSubSubgroup", "petBreed"].map(
+      (b) => `${b}${s}-custom`,
+    ),
+  ),
+];
+// 给输入框接上「打字时去掉标点」
+function _attachNoPunct(input) {
+  if (!input) return;
+  const clean = () => {
+    const v = _stripPunct(input.value);
+    if (v !== input.value) input.value = v;
+  };
+  // 中文输入法拼字过程中（isComposing）不处理，选完字再过滤
+  input.addEventListener("input", (e) => {
+    if (!e.isComposing) clean();
+  });
+  input.addEventListener("compositionend", clean);
+}
+_NO_PUNCT_INPUT_IDS.forEach((id) => _attachNoPunct(document.getElementById(id)));
+window.addEventListener("orientationchange", _setAppHeight);
+
 // ── Socket.io real-time notifications (optional — won't crash if io missing) ──
 function _refreshMyProfileCard() {
   const overlay = document.getElementById("profile-edit");
@@ -12,7 +160,7 @@ function _refreshMyProfileCard() {
 }
 
 if (typeof io !== "undefined") {
-  const _appSocket = io();
+  const _appSocket = io({ path: PREDATE_BASE + "/socket.io" });
   _appSocket.on("like-event", (data) => {
     if (!currentUser) return;
     if (data.username !== currentUser.username) return;
@@ -28,6 +176,22 @@ if (typeof io !== "undefined") {
   });
 }
 
+// 密码框右侧的小眼睛：切换密码明文 / 隐藏
+function togglePasswordVisible() {
+  const input = document.getElementById("password");
+  const btn = document.getElementById("pw-toggle");
+  if (!input || !btn) return;
+  const show = input.type === "password";
+  input.type = show ? "text" : "password";
+  btn.innerHTML = iconImg(show ? "pw_eye" : "pw_eye_closed", 2);
+  btn.setAttribute("aria-label", show ? "隐藏密码 Hide password" : "显示密码 Show password");
+}
+// 页面加载完（图标数据已定义）后画上初始的眼睛图标
+document.addEventListener("DOMContentLoaded", () => {
+  const btn = document.getElementById("pw-toggle");
+  if (btn) btn.innerHTML = iconImg("pw_eye_closed", 2);
+});
+
 // Login Function
 function handleLogin() {
   const username = document.getElementById("username").value.trim();
@@ -36,31 +200,29 @@ function handleLogin() {
   if (!username) return showAlert("请输入用户名！\nPlease enter a username.");
   if (!password) return showAlert("请输入密码！\nPlease enter a password.");
 
-  // 从服务器拿所有 profiles，检查是否已存在
-  fetch("/profiles")
-    .then((res) => res.json())
-    .then((data) => {
-      const existing = data.find(
-        (p) => p.username === username && p.password === password,
-      );
-
-      if (existing) {
-        currentUser = existing;
-        // 老用户 → 直接进入 swipe
-        checkNotifications();
-        startMessagePolling();
-        createSwipeCard();
+  // 账号密码交给服务器比对，别人的密码不会发到手机上
+  api("/login", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ username, password }),
+  })
+    .then((res) => res.json().then((data) => ({ status: res.status, data })))
+    .then(({ status, data }) => {
+      if (status === 200) {
+        // 老用户 → 直接进入 swipe（跳过教学）
+        _acceptLogin(data);
+        _enterAfterLogin();
+      } else if (status === 401) {
+        // username 存在但密码错
+        showAlert("密码错误 / Wrong password");
+      } else if (status === 404) {
+        // 新用户 → 走注册流程
+        goTo("profile-name");
       } else {
-        const userExists = data.find((p) => p.username === username);
-        if (userExists) {
-          // username 存在但密码错
-          alert("密码错误 / Wrong password");
-        } else {
-          // 新用户 → 走注册流程
-          goTo("profile-name");
-        }
+        showAlert("登录失败，请稍后再试\nLogin failed, please try again.");
       }
-    });
+    })
+    .catch(() => showAlert("连接服务器失败，请稍后再试\nCannot reach server, please try again."));
 }
 
 // Page Navigation Function
@@ -71,6 +233,7 @@ const _setupPageOrder = [
   "profile-housing",
   "profile-vehicle",
   "profile-sterilized",
+  "profile-intent",
   "profile-parents",
   "profile-mbti",
   "profile-edu",
@@ -132,27 +295,30 @@ function validatePage(pageId) {
     }
 
     case "profile-breed": {
-      if (!document.getElementById("petBreedClass")?.value) {
-        showAlert("请选择种族大类！\nPlease select a species class."); return false;
-      }
-      const specWrapper = document.getElementById("breedSpecificWrapper");
-      if (specWrapper && !specWrapper.classList.contains("hidden")) {
-        if (!document.getElementById("petBreed")?.value) {
-          showAlert("请选择具体物种！\nPlease select a species."); return false;
-        }
-      }
-      const isMixed = document.getElementById("isMixed")?.checked;
-      if (isMixed) {
-        if (!document.getElementById("petBreedClass2")?.value) {
-          showAlert("请选择第二族裔大类！\nPlease select the 2nd heritage class."); return false;
-        }
-        const spec2 = document.getElementById("breedSpecificWrapper2");
-        if (spec2 && !spec2.classList.contains("hidden")) {
-          if (!document.getElementById("petBreed2")?.value) {
-            showAlert("请选择第二族裔物种！\nPlease select the 2nd heritage species."); return false;
+      // 每一级（大类/细类/子类/物种）只要显示出来就必须选；选了自定义就必须填
+      const checkBreedLevels = (s, prefixZh, prefixEn) => {
+        const ids = _breedIds(s);
+        const levels = [
+          [ids.cls, null, "种族大类", "species class"],
+          [ids.sg, ids.sgWrap, "细类", "subgroup"],
+          [ids.ssg, ids.ssgWrap, "子类", "sub-group"],
+          [ids.sp, ids.spWrap, "具体物种", "species"],
+        ];
+        for (const [selId, wrapId, zh, en] of levels) {
+          if (wrapId && document.getElementById(wrapId)?.classList.contains("hidden")) continue;
+          if (!_breedSel(selId)) {
+            const isCustom = document.getElementById(selId)?.value === _BREED_CUSTOM;
+            showAlert(isCustom
+              ? `请填写自定义的${prefixZh}${zh}！\nPlease enter your custom ${prefixEn}${en}.`
+              : `请选择${prefixZh}${zh}！\nPlease select ${prefixEn}${en}.`);
+            return false;
           }
         }
-      }
+        return true;
+      };
+      if (!checkBreedLevels("", "", "a ")) return false;
+      const isMixed = document.getElementById("isMixed")?.checked;
+      if (isMixed && !checkBreedLevels("2", "第二族裔", "the 2nd heritage ")) return false;
       const heightWrapper = document.getElementById("heightWrapper");
       if (heightWrapper && !heightWrapper.classList.contains("hidden")) {
         if (!document.getElementById("petHeight")?.value) {
@@ -163,9 +329,6 @@ function validatePage(pageId) {
     }
 
     case "profile-gender": {
-      if (!document.getElementById("petOrientation")?.value) {
-        showAlert("请选择性取向！\nPlease select your orientation."); return false;
-      }
       const dp = document.getElementById("datePicker");
       if (dp && !dp.classList.contains("hidden")) {
         showAlert('请先点击"确定 OK"确认出生日期！\nPlease confirm your birth date first.'); return false;
@@ -173,28 +336,31 @@ function validatePage(pageId) {
       if (!document.getElementById("birthDisplay")?.value) {
         showAlert("请选择出生日期！\nPlease select your birth date."); return false;
       }
+      if (!document.getElementById("petGender")?.value) {
+        showAlert("请选择性别！\nPlease select your gender."); return false;
+      }
+      if (document.getElementById("petGender").value === "自定义/Custom" &&
+          !_stripPunct(document.getElementById("gender-custom")?.value).trim()) {
+        showAlert("请填写自定义性别！\nPlease enter your custom gender."); return false;
+      }
+      if (!document.getElementById("petOrientation")?.value) {
+        showAlert("请选择性取向！\nPlease select your orientation."); return false;
+      }
+      if (document.getElementById("petOrientation").value === "自定义/Custom" &&
+          !_stripPunct(document.getElementById("orientation-custom")?.value).trim()) {
+        showAlert("请填写自定义性取向！\nPlease enter your custom orientation."); return false;
+      }
       return true;
     }
 
     case "profile-housing": {
-      const resolvedCity = getHousingCityValue("house");
-      if (!resolvedCity) {
+      if (!getHousingCityValue("house")) {
         showAlert("请选择城市！\nPlease select a city."); return false;
       }
-      if (!document.getElementById("house-district")?.value) {
-        showAlert("请摇骰子选择区域！\nPlease roll for district."); return false;
-      }
-      if (!document.getElementById("house-type")?.value) {
-        showAlert("请摇骰子选择住宅类型！\nPlease roll for house type."); return false;
-      }
-      if (!document.getElementById("house-area")?.value) {
-        showAlert("请摇骰子选择面积！\nPlease roll for area."); return false;
-      }
-      if (!document.getElementById("house-tenure")?.value) {
-        showAlert("请摇骰子选择租/买！\nPlease roll for rent or buy."); return false;
-      }
-      if (!document.getElementById("house-price")?.value) {
-        showAlert("请摇骰子选择房屋价格！\nPlease roll for house price."); return false;
+      // 按页面顺序，提示第一个还没摇的（包括别墅层数、楼层、产权、房贷这些只在特定情况出现的）
+      const missing = _updateHouseSteps();
+      if (missing) {
+        showAlert(`请摇骰子选择「${missing.label}」！\nPlease roll the dice for "${missing.labelEn}" first.`); return false;
       }
       return true;
     }
@@ -202,6 +368,12 @@ function validatePage(pageId) {
     case "profile-vehicle": {
       if (!document.getElementById("vehicle-types-hidden")?.value) {
         showAlert("请摇骰子选择车辆类型！\nPlease roll for vehicle type."); return false;
+      }
+      if (/^(普通车|豪车)/.test(_val("vehicle-types-hidden")) && !_val("vehicle-model")) {
+        showAlert("请摇骰子选择车辆品牌！\nPlease roll for car brand."); return false;
+      }
+      if (!_val("vehicle-count")) {
+        showAlert("请摇骰子选择车辆数量！\nPlease roll for vehicle count."); return false;
       }
       if (!document.getElementById("vehicle-price")?.value) {
         showAlert("请摇骰子选择车辆价值！\nPlease roll for vehicle price."); return false;
@@ -211,47 +383,17 @@ function validatePage(pageId) {
 
     case "profile-sterilized": {
       if (!document.getElementById("petSterilized")?.value) {
-        showAlert("请摇骰子选择婚恋状况！\nPlease roll for relationship status."); return false;
+        showAlert("请选择婚恋状况！\nPlease select your relationship status."); return false;
       }
-      if (!document.getElementById("rel-pastCount")?.value) {
-        showAlert("请摇骰子选择谈过几次恋爱！\nPlease roll for past relationships."); return false;
+      // 按页面顺序找第一个还没摇的
+      const missing = _updateRelSteps();
+      if (missing) {
+        showAlert(`请摇骰子选择「${missing.label}」！\nPlease roll the dice for "${missing.labelEn}" first.`); return false;
       }
-      // Conditional: ex-group visible
-      const exGroup = document.getElementById("rel-ex-group");
-      if (exGroup && !exGroup.classList.contains("hidden")) {
-        if (!document.getElementById("rel-exContact")?.value)
-          { showAlert("请摇骰子选择前任联系情况！\nPlease roll for ex contact."); return false; }
-        if (!document.getElementById("rel-stillLoveEx")?.value)
-          { showAlert("请摇骰子选择是否还爱前任！\nPlease roll for still love ex."); return false; }
-        if (!document.getElementById("rel-whiteMoon")?.value)
-          { showAlert("请摇骰子选择是否有白月光！\nPlease roll for white moonlight."); return false; }
-      }
-      if (!document.getElementById("rel-kids")?.value) {
-        showAlert("请摇骰子选择是否有孩子！\nPlease roll for kids."); return false;
-      }
-      if (!document.getElementById("rel-partner")?.value) {
-        showAlert("请摇骰子选择是否有伴侣！\nPlease roll for current partner."); return false;
-      }
-      // Conditional: partner details
-      const partnerDetails = document.getElementById("rel-partner-details");
-      if (partnerDetails && !partnerDetails.classList.contains("hidden")) {
-        if (!document.getElementById("rel-partnerCount")?.value)
-          { showAlert("请摇骰子选择伴侣数量！\nPlease roll for partner count."); return false; }
-        if (!document.getElementById("rel-foreignPartner")?.value)
-          { showAlert("请摇骰子选择是否有境外伴侣！\nPlease roll for foreign partner."); return false; }
-        if (!document.getElementById("rel-otherCity")?.value)
-          { showAlert("请摇骰子选择是否有异地伴侣！\nPlease roll for long-distance partner."); return false; }
-      }
-      const noPartnerDetails = document.getElementById("rel-no-partner-details");
-      if (noPartnerDetails && !noPartnerDetails.classList.contains("hidden")) {
-        if (!document.getElementById("rel-ambiguous")?.value)
-          { showAlert("请摇骰子选择暧昧情况！\nPlease roll for ambiguous relationships."); return false; }
-        if (!document.getElementById("rel-secret")?.value)
-          { showAlert("请摇骰子选择是否有秘密伴侣！\nPlease roll for secret partner."); return false; }
-      }
-      if (!document.getElementById("rel-crush")?.value) {
-        showAlert("请摇骰子选择是否有暗恋对象！\nPlease roll for crush."); return false;
-      }
+      return true;
+    }
+
+    case "profile-intent": {
       if (!document.getElementById("rel-purpose")?.value) {
         showAlert("请摇骰子选择来这里的目的！\nPlease roll for dating purpose."); return false;
       }
@@ -269,10 +411,20 @@ function validatePage(pageId) {
       const fatherAlive = parentsStatus === "都健在" || parentsStatus === "仅父亲健在";
       const motherAlive = parentsStatus === "都健在" || parentsStatus === "仅母亲健在";
       if (fatherAlive && !getHousingCityValue("parents-father")) {
-        showAlert("请选择父亲所在城市！\nPlease select your father's city."); return false;
+        showAlert("请选择父亲来自哪里！\nPlease select your father's origin."); return false;
       }
       if (motherAlive && !getHousingCityValue("parents-mother")) {
-        showAlert("请选择母亲所在城市！\nPlease select your mother's city."); return false;
+        showAlert("请选择母亲来自哪里！\nPlease select your mother's origin."); return false;
+      }
+      const shown = (id) => !document.getElementById(id)?.classList.contains("hidden");
+      if (shown("parents-rel-wrapper") && !_val("parents-relationship")) {
+        showAlert("请摇骰子选择父母关系！\nPlease roll for parents' relationship."); return false;
+      }
+      if (!_val("parents-siblingCount")) {
+        showAlert("请摇骰子选择兄弟姐妹！\nPlease roll for siblings."); return false;
+      }
+      if (shown("siblings-wealth-wrapper") && !_val("parents-siblingWealth")) {
+        showAlert("请摇骰子选择兄弟姐妹状况！\nPlease roll for siblings' wealth."); return false;
       }
       return true;
     }
@@ -325,7 +477,250 @@ function validateAndGoTo(fromPage, toPage) {
 }
 
 function validateAndCreateCard() {
+  // 正在保存时忽略重复点击，防止同一份档案被提交多次
+  if (_pendingProfileSave) return;
   if (validatePage("profile-photo")) createCard();
+}
+
+// ── 城市发展程度加减分（房子所在城市）──
+// 中国：按通行的城市分级（一线 / 新一线 / 二线 / 其他地级市 / 偏远自治州·地区·盟）
+// 国外：按国家发展水平（大致参照世界银行收入分组）定基础分；全球一线城市、各国首都和最大城市另外加分
+// 自定义城市 / 自定义国家：不加不减（0）
+const CITY_DEV_CN = {
+  10: ["北京", "上海", "广州", "深圳", "香港"],
+  6: ["澳门", "台北"],
+  5: ["成都", "杭州", "重庆", "武汉", "苏州", "西安", "南京", "长沙", "天津", "郑州", "东莞", "青岛", "昆明", "宁波", "合肥"],
+  2: ["佛山", "沈阳", "无锡", "济南", "厦门", "福州", "温州", "哈尔滨", "石家庄", "大连", "南宁", "泉州", "金华", "贵阳",
+      "常州", "长春", "南昌", "南通", "嘉兴", "徐州", "惠州", "太原", "台州", "绍兴", "保定", "中山", "潍坊", "临沂",
+      "珠海", "烟台", "兰州", "乌鲁木齐", "呼和浩特", "海口", "三亚", "新北", "台中", "高雄", "桃园", "台南", "新竹"],
+};
+const CITY_DEV_CN_DEFAULT = -3; // 其他地级市（三四五线）
+const CITY_DEV_CN_REMOTE = -6; // 自治州、地区、盟、林区
+// 国家发展水平：A 发达/高收入 +3，B 中高收入 -2，C 中低收入 -6（没列出的默认 C），D 低收入 -10
+const COUNTRY_DEV_TIER = {
+  A: ["日本", "韩国", "新加坡", "以色列", "阿联酋", "卡塔尔", "科威特", "巴林", "沙特阿拉伯", "文莱", "阿曼", "塞浦路斯",
+      "英国", "德国", "法国", "意大利", "西班牙", "爱尔兰", "葡萄牙", "荷兰", "比利时", "卢森堡", "瑞士", "奥地利",
+      "列支敦士登", "摩纳哥", "安道尔", "圣马力诺", "梵蒂冈", "马耳他", "丹麦", "瑞典", "挪威", "芬兰", "冰岛",
+      "爱沙尼亚", "拉脱维亚", "立陶宛", "波兰", "捷克", "斯洛伐克", "匈牙利", "斯洛文尼亚", "克罗地亚", "希腊", "罗马尼亚",
+      "美国", "加拿大", "巴哈马", "巴巴多斯", "特立尼达和多巴哥", "圣基茨和尼维斯", "安提瓜和巴布达", "巴拿马",
+      "智利", "乌拉圭", "圭亚那", "澳大利亚", "新西兰", "帕劳", "瑙鲁", "塞舌尔"],
+  B: ["俄罗斯", "土耳其", "马来西亚", "泰国", "印度尼西亚", "哈萨克斯坦", "土库曼斯坦", "格鲁吉亚", "亚美尼亚", "阿塞拜疆",
+      "伊拉克", "约旦", "马尔代夫", "保加利亚", "塞尔维亚", "黑山", "北马其顿", "阿尔巴尼亚", "波黑", "白俄罗斯", "摩尔多瓦",
+      "乌克兰", "墨西哥", "巴西", "阿根廷", "哥伦比亚", "秘鲁", "厄瓜多尔", "巴拉圭", "委内瑞拉", "哥斯达黎加", "多米尼加",
+      "古巴", "牙买加", "伯利兹", "危地马拉", "萨尔瓦多", "格林纳达", "圣卢西亚", "圣文森特和格林纳丁斯", "多米尼克",
+      "苏里南", "南非", "博茨瓦纳", "纳米比亚", "加蓬", "赤道几内亚", "毛里求斯", "利比亚", "阿尔及利亚",
+      "斐济", "汤加", "萨摩亚", "图瓦卢", "马绍尔群岛"],
+  D: ["阿富汗", "朝鲜", "也门", "叙利亚", "索马里", "南苏丹", "苏丹", "埃塞俄比亚", "厄立特里亚", "乌干达", "卢旺达",
+      "布隆迪", "刚果民主共和国", "中非", "乍得", "尼日尔", "马里", "布基纳法索", "几内亚", "几内亚比绍", "塞拉利昂",
+      "利比里亚", "冈比亚", "多哥", "马达加斯加", "马拉维", "莫桑比克", "海地"],
+};
+const COUNTRY_DEV_BASE = { A: 3, B: -2, C: -6, D: -10 };
+// 全球一线城市：+8（摩纳哥 +10）
+const CITY_DEV_GLOBAL = {
+  美国: ["纽约", "洛杉矶", "旧金山", "芝加哥", "波士顿", "西雅图", "华盛顿", "圣何塞", "帕洛阿尔托", "迈阿密"],
+  加拿大: ["多伦多", "温哥华", "蒙特利尔"], 英国: ["伦敦"], 法国: ["巴黎"], 德国: ["柏林", "慕尼黑", "法兰克福", "汉堡"],
+  日本: ["东京", "大阪", "京都", "横滨"], 韩国: ["首尔"], 新加坡: ["新加坡"], 澳大利亚: ["悉尼", "墨尔本"],
+  瑞士: ["苏黎世", "日内瓦"], 阿联酋: ["迪拜", "阿布扎比"], 荷兰: ["阿姆斯特丹"], 意大利: ["米兰", "罗马"],
+  西班牙: ["马德里", "巴塞罗那"], 瑞典: ["斯德哥尔摩"], 丹麦: ["哥本哈根"], 奥地利: ["维也纳"], 卢森堡: ["卢森堡"],
+  爱尔兰: ["都柏林"], 挪威: ["奥斯陆"], 卡塔尔: ["多哈"], 以色列: ["特拉维夫"], 新西兰: ["奥克兰"],
+};
+const CITY_DEV_MONACO = 10;
+// 有省/州这一层的国家：首都和最大城市单独列出（同样在国家基础分上 +4）
+const CITY_DEV_MAJOR = {
+  俄罗斯: ["莫斯科", "圣彼得堡"], 巴西: ["圣保罗", "里约热内卢", "巴西利亚"], 墨西哥: ["墨西哥城", "蒙特雷", "瓜达拉哈拉"],
+  印度: ["孟买", "新德里", "班加罗尔"],
+};
+
+// prefix：house（房子所在城市）/ parents-father / parents-mother（父母籍贯）
+function getCityScore(prefix = "house") {
+  const city = getHousingCityValue(prefix);
+  if (!city) return 0;
+  const country = getHousingCountry(prefix);
+  if (!country || country === "其他") return 0; // 自定义国家/城市（包括别人自定义后加进「其他」里的）：不加不减
+  const custom = document.getElementById(`${prefix}-city-custom`);
+  if (custom && !custom.classList.contains("hidden")) return 0;
+
+  if (country === "中国") {
+    for (const [score, list] of Object.entries(CITY_DEV_CN)) if (list.includes(city)) return Number(score);
+    if (/自治州|地区|盟|林区/.test(city)) return CITY_DEV_CN_REMOTE;
+    return CITY_DEV_CN_DEFAULT;
+  }
+  if (country === "摩纳哥") return CITY_DEV_MONACO;
+  if (CITY_DEV_GLOBAL[country]?.includes(city)) return 8;
+
+  const tier = Object.keys(COUNTRY_DEV_TIER).find((t) => COUNTRY_DEV_TIER[t].includes(country)) || "C";
+  const base = COUNTRY_DEV_BASE[tier];
+  // 首都 / 最大城市（城市列表里的第一个）：在国家基础分上 +4
+  const citySel = document.getElementById(`${prefix}-city-select`);
+  const firstCity = citySel?.options[1]?.value;
+  const hasDivision = !document.getElementById(`${prefix}-division-wrap`)?.classList.contains("hidden");
+  if (CITY_DEV_MAJOR[country]?.includes(city) || (!hasDivision && city === firstCity)) return base + 4;
+  return base;
+}
+
+// ── 新加项目的加减分：婚恋经历、交友意向、父母关系/籍贯、房子细节、车辆数量、身高、星座、择偶标准 ──
+// 同一个值（比如「有/Yes」「0」）在不同问题里分数不同，所以按问题分开写
+const FIELD_SCORES = {
+  // 和前任联系
+  "rel-exContact": {
+    "完全断联/No Contact": +3, "偶尔联系/Occasional": 0, "还是朋友/Still Friends": -2,
+    "暧昧未清/Unresolved": -5, "藕断丝连/On & Off": -8,
+  },
+  // 还爱前任
+  "rel-stillLoveEx": {
+    "完全放下/Moved On": +3, "不确定/Not Sure": -2, "有一点/A Little": -3, "还爱/Still Love": -6, "深爱/Still Deeply": -10,
+  },
+  // 白月光
+  "rel-whiteMoon": { "没有/None": +2, "可能有/Maybe": -2, "有/Yes": -4, "一直有/Always": -6 },
+  // 暗恋
+  "rel-crush": { "没有/None": 0, "可能/Maybe": -1, "有/Yes": -3, "暗恋中/Secretly": -3, "强烈迷恋/Intensely": -6 },
+  // 来 App 的原因
+  "rel-purpose": {
+    "想认真恋爱/Looking for Love": +5, "探索一下/Just Exploring": 0, "被朋友安利/Friend's Rec": 0,
+    "好玩/Just for Fun": -1, "打发时间/Killing Time": -1, "孤独/Lonely": -2, "刚分手/Just Broke Up": -3,
+    "炮友/FWB": -5, "一夜情/ONS": -6, "三人行/Threesome": -8, "和伴侣吵架了/Fight w/ Partner": -10,
+  },
+  // 想发展的关系
+  "rel-goal": {
+    "严肃恋爱/Serious Relationship": +5, "结婚对象/Marriage": +5, "雌雄伴侣 / Dating": +3, "灵魂伴侣/Soulmate": +3, "柏拉图/Platonic": +2,
+    "结交朋友/Make Friends": +1, "饭搭子/Food Buddy": +1, "搭子/Buddy": 0,
+    "随缘/Whatever": -2, "网恋/Online Romance": -2, "短期交友/Short-term Fling": -2, "唇友/Kissing Friend": -3,
+    "床搭子/Bed Buddy": -4, "长期固炮/Regular FWB": -5, "长期炮友/Long-term FWB": -5,
+  },
+  // 父母关系
+  "parents-relationship": {
+    "离婚/Divorced": -5, "冷战/Cold War": -3, "普通/Ordinary": 0, "和睦/Harmonious": +2, "恩爱/Loving": +3,
+    "神仙眷侣/Perfect Couple ✨": +5,
+  },
+  // 房子：区域
+  "house-district": {
+    郊区: -4, 老城区: -1, 新区: 0, 学区: +2, 科技园区: +2, 市中心: +3, 滨水区: +3, CBD: +5, 豪华住宅区: +8,
+  },
+  // 别墅层数
+  "house-villa-floors": { "1层独栋": 0, "2层别墅": +1, "3层别墅": +2, "4层及以上": +4 },
+  // 住在第几层
+  "house-apt-floor": { "1-5层": -2, "6-10层": 0, "11-20层": +1, "21-30层": +1, "31-40层": +2, "40层以上": +3 },
+  // 一共几层（老破小扣分）
+  "house-apt-total": { "6层以下": -2, "10层": 0, "18层": 0, "28层": 0, "35层": 0, "50层以上": +2 },
+  // 车辆数量
+  "vehicle-count": { "1": 0, "2": +2, "3": +3, "4+": +5 },
+  // 性别：非二元、自定义扣分
+  "petGender": { "雄/Male": 0, "雌/Female": 0, "非二元/Non-binary": -4, "自定义/Custom": -5 },
+  // 车辆类型：豪车加分，越寒酸扣越多
+  "vehicle-types-hidden": {
+    "自行车 / Bicycle": -6, "单轮车 / Unicycle": -8, "三轮车 / Tricycle": -7, "电瓶车 / E-Bike": -4,
+    "摩托车 / Motorcycle": -1, "普通车 / Regular Car": 0, "豪车 / Luxury Car": +8,
+  },
+};
+
+// 车辆品牌：按品牌在 carModelsRegular / carModelsLuxury 里的档次算
+const CAR_MODEL_TIER_SCORES = {
+  carModelsRegular: { 1: -2, 2: -1, 3: 0, 4: +1, 5: +2, 6: +3 },
+  carModelsLuxury: { 1: +1, 2: +2, 3: +3, 4: +4, 5: +6, 6: +8 },
+};
+function getCarModelScore() {
+  const model = _shownVal("vehicle-model");
+  if (!model) return 0;
+  for (const [group, scores] of Object.entries(CAR_MODEL_TIER_SCORES)) {
+    for (const [tier, list] of Object.entries(HOUSING_TIERS[group])) {
+      if (list.includes(model)) return scores[tier];
+    }
+  }
+  return 0;
+}
+
+// 谈过几次：0 次 -3（没经验）、1-2 次 +2、3-4 次 0、5-6 次 -2、7-10 次 -4、11 次以上 -6
+function _pastRelScore(n) {
+  if (n === 0) return -3;
+  if (n <= 2) return +2;
+  if (n <= 4) return 0;
+  if (n <= 6) return -2;
+  if (n <= 10) return -4;
+  return -6;
+}
+
+// 星座歧视链（网络刻板印象）
+const HOROSCOPE_SCORES = {
+  天秤座: +2, 金牛座: +2, 巨蟹座: +2, 狮子座: +1, 摩羯座: +1, 白羊座: 0, 双鱼座: 0,
+  水瓶座: -1, 射手座: -1, 天蝎座: -2, 双子座: -2, 处女座: -3,
+};
+
+// 择偶标准：挑物质条件的扣分（拜金/挑剔），挑人品的加分，其他不加不减
+const STANDARD_SCORES = {
+  // 挑物质条件、挑外貌、挑家庭：扣分
+  有稳定收入: -3, 有房: -3, 有车: -3, 高学历: -3, 颜值在线: -3, 身高要求: -3, 领地宽阔: -3, 领地稳固: -2,
+  软萌: -1, 尾巴好看: -2, 体型相近: -1, 觅食能力强: -2, 筑巢技能满: -2, 家庭关系简单: -2,
+  有钱就行: -8, 富二代: -5, 可以养我: -6, 父母双亡: -6,
+  // 物种 / 食性歧视、玄学：扣分
+  同物种优先: -3, 食肉优先: -2, 食草优先: -2, MBTI对盘: -2, 星座相合: -2,
+  // 控制欲、挑剔：扣分
+  无幼崽: -2, 已绝育: -3, 无前任联系: -1, 不打游戏: -1, 不用见家长: -2, 秒回消息: -2, 能查手机: -4,
+  // 包容、看人品：加分
+  专一: +2, 体贴: +2, 情绪稳定: +2, 三观相合: +2, 不啃老: +2, 经济独立: +2, 幽默感: +1, 爱干净: +1, 会做饭: +1,
+  不介意杂交: +3, 换毛期可接受: +2, 水栖友好: +2, 接受前任: +2, 愿意见家长: +2,
+  无浓烈异味: +1, 毛发整洁: +1, 爪子干净: +1, 不挑食: +1, 独立性强: +1, 不咬人: +1, 杂食可接受: +1,
+  不催婚催生: +1, 不抽烟: +1, 愿意异地: +1, 不看星座: +1,
+  // 怪癖、越界：扣分
+  有怪癖: -2, 黏人: -1, 接受多伴侣: -4,
+  接受SM: -4, 已婚: -8, 怀孕中: -5, 接受开放关系: -5, 接受出轨: -10, 接受三人行: -6, 只约不恋: -6,
+  愿意当备胎: -6, 刚离婚: -3, 带着幼崽: -2, 有前科: -6, 恋足癖: -3, 戴项圈: -3, 想被圈养: -4,
+  愿意当饲主: -4, 发情期同步: -2, 会咬人: -3, 不洗澡也行: -3, 前任是我朋友: -4, 有毛就行: -2,
+  恋爱脑: -2, 年上: -1, 年下: -1,
+};
+
+// 身高歧视链：按这个物种的身高范围算，越高越加分
+// 最矮 20% -8，20-40% -4，40-60% 0，60-80% +3，最高 20% +6
+function getHeightScore() {
+  const h = parseInt(_shownVal("petHeight"), 10);
+  if (!h) return 0;
+  const [min, max] = getHeightRange(_breedSel("petBreed"), _breedSel("petBreedClass"));
+  const pos = max > min ? (h - min) / (max - min) : 0.5;
+  if (pos < 0.2) return -8;
+  if (pos < 0.4) return -4;
+  if (pos < 0.6) return 0;
+  if (pos < 0.8) return +3;
+  return +6;
+}
+
+function getExtraScore() {
+  let s = 0;
+  for (const [id, table] of Object.entries(FIELD_SCORES)) {
+    const v = _shownVal(id);
+    if (v && table[v] !== undefined) s += table[v];
+  }
+  // 从自定义库里选的性别（别人自定义过的）也按「自定义」扣分
+  const gender = _shownVal("petGender");
+  if (gender && FIELD_SCORES.petGender[gender] === undefined) s += FIELD_SCORES.petGender["自定义/Custom"];
+  // 谈过几次、孩子、其他关系的个数（都是数字）
+  const past = _shownVal("rel-pastCount");
+  if (past !== "") s += _pastRelScore(parseInt(past, 10) || 0);
+  const kids = parseInt(_shownVal("rel-kids"), 10) || 0;
+  s += kids === 0 ? 0 : kids === 1 ? -5 : kids === 2 ? -8 : -12;
+  const ships = _shownVal("rel-shipCount");
+  if (ships !== "") s += (parseInt(ships, 10) || 0) === 0 ? +3 : -2 * parseInt(ships, 10);
+  // 父母籍贯：每位按所在城市的发展程度算一半
+  for (const who of ["father", "mother"]) {
+    if (!document.getElementById(`parents-${who}-wrapper`)?.classList.contains("hidden")) {
+      s += Math.round(getCityScore(`parents-${who}`) / 2);
+    }
+  }
+  s += getHeightScore();
+  s += getCarModelScore();
+  // 星座
+  const horo = getHoroscope(document.getElementById("birthDisplay")?.value).split(" / ")[0];
+  s += HOROSCOPE_SCORES[horo] || 0;
+  // 择偶标准
+  document.querySelectorAll("#standards-tags .hobby-tag.selected").forEach((el) => {
+    s += STANDARD_SCORES[el.dataset.zh] || 0;
+  });
+  return s;
+}
+
+// 只取「现在显示着」的填空的值：重摇后被隐藏起来的旧答案不算分、也不存进档案
+function _shownVal(id) {
+  const el = document.getElementById(id);
+  if (!el || el.closest(".hidden")) return "";
+  return (el.value || "").trim();
 }
 
 function getTotalProfileScore() {
@@ -350,13 +745,20 @@ function getTotalProfileScore() {
     "parents-siblingWealth",
   ];
   ids.forEach((id) => {
-    const el = document.getElementById(id);
-    if (!el) return;
-    const val = el.value.trim();
+    const val = _shownVal(id);
     if (val && SCORE_DEDUCTIONS[val] !== undefined)
       score += SCORE_DEDUCTIONS[val];
   });
+  // 从自定义库里选的性取向也按「自定义」扣分
+  const orientation = _shownVal("petOrientation");
+  if (orientation && SCORE_DEDUCTIONS[orientation] === undefined) score += SCORE_DEDUCTIONS["自定义/Custom"];
   score += getHobbyScore();
+  // 婚恋经历、交友意向、家庭、房子细节、车辆数量、身高、星座、择偶标准
+  score += getExtraScore();
+  // 房子所在城市的发展程度
+  score += getCityScore();
+  // 开放关系：在恋爱中/已婚(-5) 的基础上再 -3，和原来「开放关系 -8」一致
+  if ((document.getElementById("rel-ships")?.value || "").includes(REL_SHIP_OPEN[0])) score -= 3;
   if (document.getElementById("isMixed")?.checked) score -= 10;
   const mbti = ["petMbti1","petMbti2","petMbti3","petMbti4"]
     .map(id => document.getElementById(id)?.value || "").join("");
@@ -391,7 +793,15 @@ function animateSettlement(finalScore) {
 // ── MBTI Custom Picker ──────────────────────────────────────────────────────
 const MBTI_CHARS = "ABCDEFGHIJKLMNOPQRSTUVWXYZ?!*~@&+−=^%$#/|.,()[]{}";
 
-function toggleMbtiPicker(id) {
+function toggleMbtiPicker(id, e) {
+  // 这次点击不要冒泡到页面上的「点外面就收起」，否则刚打开就被关掉
+  e?.stopPropagation();
+  const self = document.getElementById(id + "-picker");
+  // 已经打开 → 再点一下就收起
+  if (self && !self.classList.contains("hidden")) {
+    self.classList.add("hidden");
+    return;
+  }
   // close all other open pickers first
   document.querySelectorAll(".mbti-char-picker:not(.hidden)").forEach((el) => {
     if (el.id !== id + "-picker") el.classList.add("hidden");
@@ -469,15 +879,159 @@ function rollGenericTierDice(btnId, displayId, inputId, tierMap, onRoll) {
   }, 70);
 }
 
-function onPastRelRolled(value) {
-  const hasRel = value !== "0段/None";
-  document.getElementById("rel-ex-group")?.classList.toggle("hidden", !hasRel);
+// ── 婚恋状况 → 其他关系 ship（可多选）──
+// [中文, English, 说明, 英文说明]
+const REL_SHIPS = [
+  ["正式对象", "relationship", "能发朋友圈、见家长那种", "the post-it-online, meet-the-parents kind"],
+  ["暧昧拉扯", "situationship", "说不清，但就是舍不得删", "undefined, but you can't bring yourself to delete them"],
+  ["通勤点头之交", "station-ship", "每天地铁偶遇的「熟悉陌生人」", "the familiar stranger you see on the subway every day"],
+  ["旅途限定", "vacationship", "一起浪过，回城就删好友", "wild on the trip, unfriended back home"],
+  ["聊天搭子", "conversationship", "天天聊天，却从不约出来", "chat every day, never meet up"],
+  ["工位搭子", "workationship", "公司CP，离职就散场", "office couple, over when someone quits"],
+  ["等他回复", "waitationship", "一直等他表态的那位「备胎」", "the backup still waiting for them to commit"],
+  ["异地备胎", "locationship", "地图距离=心的距离", "map distance = heart distance"],
+  ["教学型绑定", "educationship", "他讲我听，不一定是老师", "they teach, you listen, not necessarily a teacher"],
+  ["拖着不谈", "procrastinationship", "谁都不说破，就这么耗着", "nobody says it out loud, so it just drags on"],
+  ["幻想对象", "imaginationship", "对方可能连你是谁都不知道", "they may not even know who you are"],
+  ["相亲第一轮", "navigationship", "正在摸底，考虑要不要发展", "still sizing each other up"],
+  ["超心累关系", "frustrationship", "喜欢又走不近，离不开又不快乐", "can't get closer, can't leave, not happy"],
+  ["精神恋人", "appreciationship", "互相欣赏，心动但不动手", "mutual admiration, all feelings, no moves"],
+  ["资讯搭子", "informationship", "只分享链接不聊人生", "only send each other links, never talk about life"],
+  ["保质期恋", "expirationship", "开始就知道会结束", "knew it would end from day one"],
+  ["乱七八糟", "complicationship", "谁是谁都说不清的局", "a mess where no one knows who's with whom"],
+  ["慢慢试探", "investigationship", "正在考察能不能当对象", "testing whether they're partner material"],
+  ["将就过", "accommodationship", "不合适但不想重新开始", "not right, but too tired to start over"],
+  ["局上限定互动", "celebrationship", "局内熟，局外不回消息", "close at parties, ghost outside them"],
+  ["功利型绑定", "destination-ship", "为目标而凑合一起", "together for a goal, not for love"],
+  ["想起来才联系", "rotationship", "时间表型朋友", "a friend on a schedule"],
+  ["社媒营业CP", "insta-presentationship", "只存在社交媒体里", "only exists on social media"],
+  ["差点就在一起了", "approximationship", "没表白、没捅破，就没了", "never confessed, never said it, then it was gone"],
+  ["只发信息不见面", "textationship", "微信聊不停，但从不约出来", "texting nonstop, never meeting"],
+  ["滤镜互动型", "snaplationship", "限时自拍点个火就断线", "streak selfies, then silence"],
+  ["顺路熟人", "mationship", "合车搭子，聊完就散", "carpool buddy, gone after the ride"],
+  ["只在派对打招呼", "eventationship", "除了蹦迪没交集", "nothing in common but the dance floor"],
+  ["健身点头朋友", "gymationship", "熟悉又陌生的撸铁搭子", "the gym buddy you know but don't know"],
+  ["合租但不熟", "roomationship", "厨房都不会同时出现", "never even in the kitchen at the same time"],
+  ["追剧限定", "netflixationship", "一起看剧，不看你眼睛", "watch shows together, never look at each other"],
+  ["咖啡社交型", "coffeelationship", "每次都点拿铁，从不加你微信", "always orders a latte, never adds you"],
+  ["语音陪伴型", "voicemationship", "听声音熟，见面尴尬", "know the voice, awkward in person"],
+  ["表情包友情", "memationship", "全靠梗图维系感情", "held together entirely by memes"],
+  ["转账关系", "venmoship", "除了分账毫无瓜葛", "nothing between you but split bills"],
+  ["情感空窗", "dryationship", "像在恋爱，但没感觉了", "looks like love, feels like nothing"],
+  ["被拉黑型", "ghostationship", "昨天还说晚安，今天消失了", "said goodnight yesterday, vanished today"],
+  ["撩完就跑型", "flirtationship", "总是撩人但从不认真", "always flirting, never serious"],
+  ["先缓缓型", "on-hold-ship", "搁置状态、烂尾关系", "on hold, never finished"],
+  ["感情回收站", "reboundship", "失恋疗伤用，不持久", "for healing a breakup, not built to last"],
+];
+// 只有「恋爱中」「已婚」才多出的选项
+const REL_SHIP_OPEN = ["开放关系", "open relationship", "有伴侣，但关系是开放的", "has a partner, but it's open"];
+const _shipValue = ([zh, en]) => `${zh} / ${en}`;
+
+// 摇出来的其他关系池：恋爱中/已婚才可能摇到「开放关系」
+function _shipPool() {
+  const status = _val("petSterilized");
+  const withOpen = status === "恋爱中/Dating" || status === "已婚/Married";
+  return withOpen ? [REL_SHIP_OPEN, ...REL_SHIPS] : REL_SHIPS;
 }
 
-function onPartnerRolled(value) {
-  const hasPartner = value !== "无/None";
-  document.getElementById("rel-partner-details")?.classList.toggle("hidden", !hasPartner);
-  document.getElementById("rel-no-partner-details")?.classList.toggle("hidden", hasPartner);
+function onRelStatusChange() {
+  // 改成单身/离异：之前摇到的「开放关系」作废，那一段要重摇
+  const pool = new Set(_shipPool().map(_shipValue));
+  document.querySelectorAll("#rel-ships-list input[type=hidden]").forEach((inp) => {
+    if (inp.value && !pool.has(inp.value)) _resetShipBox(inp.dataset.index);
+  });
+  _syncShips();
+  _updateRelSteps();
+}
+
+// 摇完「几段其他关系」：生成对应个数的骰子框
+function onShipCountRolled(value) {
+  const n = parseInt(value, 10) || 0;
+  const list = document.getElementById("rel-ships-list");
+  list.innerHTML = Array.from({ length: n }, (_, i) => `
+    <div id="rel-ship-step-${i}" class="hidden">
+      <label>第 ${i + 1} 段 Relationship #${i + 1}</label>
+      <div class="dice-field-row">
+        <button class="dice-roll-btn" id="rel-ship-${i}-dice-btn" data-rolls="0" onclick="rollShipDice(${i})">${diceFaceImg(6, 4)}</button>
+        <div id="rel-ship-${i}-display" class="dice-result-input ship-result">—</div>
+        <input id="rel-ship-${i}" data-index="${i}" type="hidden" value="" />
+      </div>
+    </div>`).join("");
+  list.dataset.count = n;
+  _syncShips();
+  _updateRelSteps();
+}
+
+function _resetShipBox(i) {
+  const inp = document.getElementById(`rel-ship-${i}`);
+  const disp = document.getElementById(`rel-ship-${i}-display`);
+  const btn = document.getElementById(`rel-ship-${i}-dice-btn`);
+  if (inp) inp.value = "";
+  if (disp) disp.textContent = "—";
+  if (btn) { btn.dataset.rolls = "0"; btn.disabled = false; btn.classList.remove("dice-exhausted"); btn.innerHTML = diceFaceImg(6, 4); }
+}
+
+// 摇第 i 段是哪种关系：不和其他段重复；结果旁边直接显示说明
+function rollShipDice(i) {
+  const btn = document.getElementById(`rel-ship-${i}-dice-btn`);
+  const display = document.getElementById(`rel-ship-${i}-display`);
+  const inp = document.getElementById(`rel-ship-${i}`);
+  if (!btn || !display || !inp) return;
+  const rolls = parseInt(btn.dataset.rolls || "0", 10);
+  if (rolls >= MAX_HOUSING_ROLLS) return;
+  btn.dataset.rolls = rolls + 1;
+  btn.disabled = true;
+  let count = 0;
+  const iv = setInterval(() => {
+    btn.innerHTML = diceFaceImg(Math.floor(Math.random() * 6) + 1, 4);
+    count++;
+    if (count >= 16) {
+      clearInterval(iv);
+      btn.innerHTML = diceFaceImg(Math.floor(Math.random() * 6) + 1, 4);
+      const remaining = MAX_HOUSING_ROLLS - parseInt(btn.dataset.rolls, 10);
+      btn.disabled = remaining <= 0;
+      if (remaining <= 0) btn.classList.add("dice-exhausted");
+      else btn.title = `还可摇 ${remaining} 次 / ${remaining} rolls left`;
+      const taken = new Set([...document.querySelectorAll("#rel-ships-list input[type=hidden]")]
+        .filter((x) => x !== inp).map((x) => x.value));
+      const choices = _shipPool().filter((sh) => !taken.has(_shipValue(sh)));
+      const [zh, en, desc, descEn] = choices[Math.floor(Math.random() * choices.length)];
+      inp.value = _shipValue([zh, en]);
+      display.innerHTML = `<b class="zh">${escapeHtml(zh)}</b> <small class="en">${escapeHtml(en)}</small><span class="ship-desc"><span class="zh">${escapeHtml(desc)}</span> <span class="en">${escapeHtml(descEn)}</span></span>`;
+      _syncShips();
+    }
+  }, 70);
+}
+
+// 汇总到 rel-ships：0 段 =「都没有」；否则把各段拼起来
+function _syncShips() {
+  const list = document.getElementById("rel-ships-list");
+  const n = parseInt(list?.dataset.count || "0", 10);
+  const out = document.getElementById("rel-ships");
+  if (!out) return;
+  if (!_val("rel-shipCount")) out.value = "";
+  else if (n === 0) out.value = REL_SHIP_NONE;
+  else out.value = [...list.querySelectorAll("input[type=hidden]")].map((x) => x.value).filter(Boolean).join(" · ");
+}
+
+// ── 婚恋状况页：一个个出现 ──
+// 婚恋状况 → 谈过几段 →（谈过才问）前任联系 → 还爱前任 → 白月光 → 孩子 → Crush → 几段其他关系 → 每一段
+function _relSteps() {
+  const hadRel = () => !!_val("rel-pastCount") && _val("rel-pastCount") !== "0";
+  const n = parseInt(document.getElementById("rel-ships-list")?.dataset.count || "0", 10);
+  return [
+    { el: "rel-step-past", value: "rel-pastCount", label: "谈过多少恋爱", labelEn: "Past relationships" },
+    { el: "rel-step-exContact", value: "rel-exContact", applies: hadRel, label: "和前任还有联系吗", labelEn: "Ex contact" },
+    { el: "rel-step-stillLoveEx", value: "rel-stillLoveEx", applies: hadRel, label: "还爱前任吗", labelEn: "Still love your ex" },
+    { el: "rel-step-whiteMoon", value: "rel-whiteMoon", label: "有白月光吗", labelEn: "The one that got away" },
+    { el: "rel-step-kids", value: "rel-kids", label: "有孩子吗", labelEn: "Kids" },
+    { el: "rel-step-crush", value: "rel-crush", label: "现在对谁有 Crush 吗", labelEn: "Current crush" },
+    { el: "rel-step-shipCount", value: "rel-shipCount", label: "还有几段其他关系", labelEn: "Other ships" },
+    ...Array.from({ length: n }, (_, i) => ({ el: `rel-ship-step-${i}`, value: `rel-ship-${i}`, label: `第 ${i + 1} 段其他关系`, labelEn: `Other ship #${i + 1}` })),
+  ];
+}
+function _updateRelSteps() {
+  return _applySteps(_relSteps(), !!_val("petSterilized"));
 }
 
 // Date Picker Functions
@@ -488,76 +1042,78 @@ let selectedDay = _today.getDate();
 
 function openDatePicker() {
   document.getElementById("datePicker").classList.remove("hidden");
-  generateWheels(true);
+  generateWheels();
 }
 
-function generateWheels(scrollToSelected = false) {
-  createWheel(
-    "yearWheel",
-    0,
-    5000,
-    selectedYear,
-    (v) => (selectedYear = v),
-    scrollToSelected,
-  );
-  createWheel(
-    "monthWheel",
-    1,
-    12,
-    selectedMonth,
-    (v) => (selectedMonth = v),
-    scrollToSelected,
-  );
-  createWheel(
-    "dayWheel",
-    1,
-    31,
-    selectedDay,
-    (v) => (selectedDay = v),
-    scrollToSelected,
-  );
+const _daysInMonth = (y, m) => new Date(y, m, 0).getDate();
+
+function generateWheels() {
+  createWheel("yearWheel", 0, 5000, selectedYear, (v) => { selectedYear = v; _refreshDayWheel(); });
+  createWheel("monthWheel", 1, 12, selectedMonth, (v) => { selectedMonth = v; _refreshDayWheel(); });
+  _refreshDayWheel(true);
 }
 
-function createWheel(
-  id,
-  start,
-  end,
-  selected,
-  onSelect,
-  scrollToSelected = false,
-) {
+// 年/月变了：日的滚轮跟着变成这个月的天数（2 月 28/29 天等）
+function _refreshDayWheel(force = false) {
+  const wheel = document.getElementById("dayWheel");
+  const max = _daysInMonth(selectedYear, selectedMonth);
+  if (!force && wheel.dataset.max === String(max)) return;
+  selectedDay = Math.min(selectedDay, max);
+  createWheel("dayWheel", 1, max, selectedDay, (v) => (selectedDay = v));
+  wheel.dataset.max = max;
+}
+
+// 滚轮：停在正中间的那个数字自动变成选中的
+function createWheel(id, start, end, selected, onSelect) {
   const wheel = document.getElementById(id);
   wheel.innerHTML = "";
-
+  // 上下各放一个空白垫片，让第一个和最后一个数字也能滚到正中间
+  const padTop = document.createElement("div");
+  padTop.className = "wheel-pad";
+  wheel.appendChild(padTop);
+  const items = [];
   for (let i = start; i <= end; i++) {
     const item = document.createElement("div");
     item.textContent = i;
-    if (i === selected) item.classList.add("selected");
-
-    item.onclick = () => {
-      onSelect(i);
-      generateWheels(false); // 只刷新高亮，不重新滚动
-    };
-
+    // 点某个数字：把它滚到正中间（滚到中间就会被选中）
+    item.onclick = () => wheel.scrollTo({ top: (i - start) * itemH(), behavior: "smooth" });
     wheel.appendChild(item);
+    items.push(item);
   }
-  wheel.addEventListener("touchstart", (e) => e.stopPropagation(), {
-    passive: true,
-  });
-  wheel.addEventListener("touchmove", (e) => e.stopPropagation(), {
-    passive: true,
-  });
+  const padBottom = padTop.cloneNode();
+  wheel.appendChild(padBottom);
 
-  // 只在初次打开时居中滚动，用 index × 行高避免 offsetTop 不准的问题
-  if (scrollToSelected) {
-    const index = selected - start;
-    requestAnimationFrame(() => {
-      requestAnimationFrame(() => {
-        const itemH = wheel.firstChild ? wheel.firstChild.offsetHeight : 28;
-        wheel.scrollTop = index * itemH - (wheel.clientHeight - itemH) / 2;
-      });
-    });
+  const itemH = () => items[0]?.offsetHeight || 28;
+  let current = -1;
+  const mark = (idx) => {
+    idx = Math.max(0, Math.min(items.length - 1, idx));
+    if (idx === current) return;
+    items[current]?.classList.remove("selected");
+    items[idx].classList.add("selected");
+    current = idx;
+    onSelect(start + idx);
+  };
+
+  let ready = false;
+  wheel.onscroll = () => {
+    if (ready) mark(Math.round(wheel.scrollTop / itemH()));
+  };
+
+  if (!wheel._touchBound) {
+    wheel.addEventListener("touchstart", (e) => e.stopPropagation(), { passive: true });
+    wheel.addEventListener("touchmove", (e) => e.stopPropagation(), { passive: true });
+    wheel._touchBound = true;
   }
+
+  // 先标出当前值，再把它滚到正中间（等布局完成才量得到高度）
+  items[selected - start]?.classList.add("selected");
+  current = selected - start;
+  setTimeout(() => {
+    const pad = (wheel.clientHeight - itemH()) / 2;
+    padTop.style.height = padBottom.style.height = pad + "px";
+    wheel.scrollTop = current * itemH();
+    ready = true;
+  }, 0);
 }
 
 function confirmDate() {
@@ -589,26 +1145,6 @@ function getPetAge() {
   } else {
     return `${years}.${months}`;
   }
-}
-
-function getHoroscope(dateStr) {
-  if (!dateStr) return "";
-  const d = new Date(dateStr);
-  if (isNaN(d)) return "";
-  const m = d.getMonth() + 1;
-  const day = d.getDate();
-  if ((m === 12 && day >= 22) || (m === 1 && day <= 19))  return "摩羯座 / Capricorn";
-  if ((m === 1 && day >= 20) || (m === 2 && day <= 18))   return "水瓶座 / Aquarius";
-  if ((m === 2 && day >= 19) || (m === 3 && day <= 20))   return "双鱼座 / Pisces";
-  if ((m === 3 && day >= 21) || (m === 4 && day <= 19))   return "白羊座 / Aries";
-  if ((m === 4 && day >= 20) || (m === 5 && day <= 20))   return "金牛座 / Taurus";
-  if ((m === 5 && day >= 21) || (m === 6 && day <= 21))   return "双子座 / Gemini";
-  if ((m === 6 && day >= 22) || (m === 7 && day <= 22))   return "巨蟹座 / Cancer";
-  if ((m === 7 && day >= 23) || (m === 8 && day <= 22))   return "狮子座 / Leo";
-  if ((m === 8 && day >= 23) || (m === 9 && day <= 22))   return "处女座 / Virgo";
-  if ((m === 9 && day >= 23) || (m === 10 && day <= 23))  return "天秤座 / Libra";
-  if ((m === 10 && day >= 24) || (m === 11 && day <= 21)) return "天蝎座 / Scorpio";
-  return "射手座 / Sagittarius";
 }
 
 // Mammal subgroups (up to 4-level selection for Mammals: class→subgroup→sub-subgroup→species)
@@ -876,21 +1412,6 @@ const breedSubgroups = {
   },
 };
 
-function findSubgroupForSpecies(cls, species) {
-  const subs = breedSubgroups[cls];
-  if (!subs) return null;
-  for (const [sg, val] of Object.entries(subs)) {
-    if (Array.isArray(val)) {
-      if (val.includes(species)) return { sg, ssg: null };
-    } else {
-      for (const [ssg, list] of Object.entries(val)) {
-        if (list.includes(species)) return { sg, ssg };
-      }
-    }
-  }
-  return null;
-}
-
 // Breed data (non-mammal classes only — mammals use breedSubgroups)
 const breedData = {
   "鸟类 / Birds": [
@@ -917,7 +1438,6 @@ const breedData = {
     "虎头海雕 / Stellar's Sea Eagle",
     "天鹅 / Swan",
     "火鸡 / Turkey",
-    "其他鸟类 / Other Bird",
   ],
   "爬行类 / Reptiles": [
     "短吻鳄 / Alligator",
@@ -936,14 +1456,12 @@ const breedData = {
     "鳄龟 / Snapping Turtle",
     "陆龟 / Tortoise",
     "龟 / Turtle",
-    "其他爬行类 / Other Reptile",
   ],
   "两栖类 / Amphibians": [
     "钝口螈 / Axolotl",
     "青蛙 / Frog",
     "蝾螈 / Salamander",
     "蟾蜍 / Toad",
-    "其他两栖类 / Other Amphibian",
   ],
   "节肢动物 / Arthropods": [
     "螃蟹 / Crab",
@@ -952,7 +1470,6 @@ const breedData = {
     "独角仙 / Rhinoceros Beetle",
     "蝎子 / Scorpion",
     "蜘蛛 / Spider",
-    "其他节肢动物 / Other Arthropod",
   ],
 };
 
@@ -1246,8 +1763,8 @@ function getHeightRange(breedSpecific, breedClass) {
 }
 
 function updateHeightOptions() {
-  const breedSpecific = document.getElementById("petBreed").value;
-  const breedClass = document.getElementById("petBreedClass").value;
+  const breedSpecific = _breedSel("petBreed");
+  const breedClass = _breedSel("petBreedClass");
   const [min, max] = getHeightRange(breedSpecific, breedClass);
   const select = document.getElementById("petHeight");
   const wrapper = document.getElementById("heightWrapper");
@@ -1272,17 +1789,6 @@ function updateHeightOptions2() {
 }
 
 // ── Housing inputs ────────────────────────────────────────────
-
-function onCitySelectChange(prefix) {
-  // city select in new two-level system never contains "自定义"
-  // custom input is handled by onProvinceSelectChange
-}
-
-function onDistrictSelectChange(prefix) {
-  const sel = document.getElementById(`${prefix}-district-select`);
-  const customInput = document.getElementById(`${prefix}-district-custom`);
-  customInput.classList.toggle("hidden", sel.value !== "自定义");
-}
 
 function rollDistrictDice(prefix) {
   const btn = document.getElementById(`${prefix}-district-dice-btn`);
@@ -1343,7 +1849,7 @@ function rollVehicleTypeDice() {
       const needsModel = picked.startsWith("普通车") || picked.startsWith("豪车");
       const modelWrapper = document.getElementById("vehicle-car-model-wrapper");
       if (modelWrapper) {
-        modelWrapper.classList.toggle("hidden", !needsModel);
+        // 品牌框什么时候出现由 _updateVehicleSteps 决定（一项一项出现）
         if (!needsModel) {
           const mBtn = document.getElementById("vehicle-model-dice-btn");
           const mDisp = document.getElementById("vehicle-model-display");
@@ -1363,10 +1869,8 @@ function rollVehicleTypeDice() {
       else if (picked.includes("豪车")) priceTierKey = "luxuryCar";
       // store category and reset price dice
       const priceWrapper = document.getElementById("vehicle-price-wrapper");
-      if (priceWrapper) {
-        priceWrapper.classList.remove("hidden");
-        priceWrapper.dataset.priceTier = priceTierKey;
-      }
+      // 价值框最后才出现（_updateVehicleSteps）；这里只记下价位档次
+      if (priceWrapper) priceWrapper.dataset.priceTier = priceTierKey;
       const pBtn = document.getElementById("vehicle-price-dice-btn");
       const pDisp = document.getElementById("vehicle-price-display");
       const pInp = document.getElementById("vehicle-price");
@@ -1403,7 +1907,7 @@ function rollVehicleModelDice() {
       const tier = (isLuxury ? HOUSING_TIERS.carModelsLuxury : HOUSING_TIERS.carModelsRegular)[roll];
       const picked = tier[Math.floor(Math.random() * tier.length)];
       if (hidden) hidden.value = picked;
-      display.textContent = picked;
+      display.textContent = disp(picked);
     }
   }, 70);
 }
@@ -1433,7 +1937,7 @@ function rollVehicleFieldDice(field) {
         tierMap = HOUSING_TIERS.vehicleCount;
       } else {
         const priceTierKey = document.getElementById("vehicle-price-wrapper")?.dataset.priceTier || "regularCar";
-        tierMap = HOUSING_TIERS.vehiclePriceByType[priceTierKey] || HOUSING_TIERS.vehiclePrice;
+        tierMap = HOUSING_TIERS.vehiclePriceByType[priceTierKey] || HOUSING_TIERS.vehiclePriceByType.regularCar;
       }
       const value = tierMap[roll];
       document.getElementById(`vehicle-${field}`).value = value;
@@ -1504,78 +2008,6 @@ function getHousingDistrictValue(prefix) {
   return sel.value || "";
 }
 
-function loadDistrictIntoSelect(prefix, savedDistrict) {
-  const sel = document.getElementById(`${prefix}-district-select`);
-  const customInput = document.getElementById(`${prefix}-district-custom`);
-  if (!sel || !savedDistrict) {
-    if (customInput) customInput.classList.add("hidden");
-    return;
-  }
-  sel.value = savedDistrict;
-  if (sel.value === savedDistrict) {
-    customInput.classList.add("hidden");
-  } else {
-    sel.value = "自定义";
-    customInput.value = savedDistrict;
-    customInput.classList.remove("hidden");
-  }
-}
-
-function loadCityIntoSelect(prefix, savedCity) {
-  const sel = document.getElementById(`${prefix}-city-select`);
-  const customInput = document.getElementById(`${prefix}-city-custom`);
-  if (!savedCity) {
-    customInput.classList.add("hidden");
-    return;
-  }
-  sel.value = savedCity;
-  if (sel.value === savedCity) {
-    customInput.classList.add("hidden");
-  } else {
-    sel.value = "自定义";
-    customInput.value = savedCity;
-    customInput.classList.remove("hidden");
-  }
-}
-
-function loadHouseTypeIntoSelect(prefix, savedType) {
-  const knownTypes = [
-    "普通住宅",
-    "公寓",
-    "大平层",
-    "别墅",
-    "地下室",
-    "阁楼",
-    "树屋",
-    "临海",
-    "湖边",
-    "下水管道",
-  ];
-  const sel = document.getElementById(`${prefix}-type`);
-  const customInput = document.getElementById(`${prefix}-type-custom`);
-  if (knownTypes.includes(savedType)) {
-    addOptionIfMissing(sel, savedType, savedType);
-    sel.value = savedType;
-    customInput.classList.add("hidden");
-  } else {
-    sel.value = "自定义";
-    customInput.value = savedType;
-    customInput.classList.remove("hidden");
-  }
-  if (prefix === "edit-house") onEditHouseTypeChange();
-  else onHouseTypeChange();
-}
-
-function getHousingCityValue(prefix) {
-  const provSel = document.getElementById(`${prefix}-province-select`);
-  if (provSel?.value === "custom") {
-    return document.getElementById(`${prefix}-city-custom`)?.value.trim() || "";
-  }
-  const sel = document.getElementById(`${prefix}-city-select`);
-  if (!sel) return "";
-  return sel.value || "";
-}
-
 function getHouseTypeValue(prefix) {
   const sel = document.getElementById(`${prefix}-type`);
   if (!sel) return "";
@@ -1585,243 +2017,317 @@ function getHouseTypeValue(prefix) {
   return sel.value || "";
 }
 
-function addOptionIfMissing(sel, value, text) {
-  if (!Array.from(sel.options).some((o) => o.value === value)) {
-    const opt = document.createElement("option");
-    opt.value = value;
-    opt.textContent = text;
-    sel.appendChild(opt);
-  }
-}
-
-// ── Province → City data ─────────────────────────────────
-const CITY_DATA = {
-  china: [
-    { zh:"上海市", en:"Shanghai", municipality:true, cities:[
-      {zh:"上海",en:"Shanghai"},{zh:"浦东新区",en:"Pudong"},{zh:"嘉定",en:"Jiading"},{zh:"松江",en:"Songjiang"},{zh:"青浦",en:"Qingpu"},{zh:"金山",en:"Jinshan"},
-    ]},
-    { zh:"北京市", en:"Beijing", municipality:true, cities:[
-      {zh:"北京",en:"Beijing"},{zh:"海淀区",en:"Haidian"},{zh:"朝阳区",en:"Chaoyang"},{zh:"西城区",en:"Xicheng"},{zh:"通州区",en:"Tongzhou"},{zh:"顺义区",en:"Shunyi"},
-    ]},
-    { zh:"天津市", en:"Tianjin", municipality:true, cities:[
-      {zh:"天津",en:"Tianjin"},{zh:"滨海新区",en:"Binhai"},{zh:"武清",en:"Wuqing"},{zh:"宝坻",en:"Baodi"},
-    ]},
-    { zh:"重庆市", en:"Chongqing", municipality:true, cities:[
-      {zh:"重庆",en:"Chongqing"},{zh:"渝中区",en:"Yuzhong"},{zh:"江北区",en:"Jiangbei"},{zh:"南岸区",en:"Nan'an"},{zh:"渝北区",en:"Yubei"},{zh:"九龙坡区",en:"Jiulongpo"},
-    ]},
-    { zh:"广东省", en:"Guangdong", cities:[
-      {zh:"广州",en:"Guangzhou"},{zh:"深圳",en:"Shenzhen"},{zh:"佛山",en:"Foshan"},{zh:"东莞",en:"Dongguan"},{zh:"珠海",en:"Zhuhai"},{zh:"汕头",en:"Shantou"},
-      {zh:"中山",en:"Zhongshan"},{zh:"惠州",en:"Huizhou"},{zh:"江门",en:"Jiangmen"},{zh:"茂名",en:"Maoming"},{zh:"湛江",en:"Zhanjiang"},{zh:"肇庆",en:"Zhaoqing"},
-    ]},
-    { zh:"浙江省", en:"Zhejiang", cities:[
-      {zh:"杭州",en:"Hangzhou"},{zh:"宁波",en:"Ningbo"},{zh:"温州",en:"Wenzhou"},{zh:"嘉兴",en:"Jiaxing"},{zh:"湖州",en:"Huzhou"},{zh:"绍兴",en:"Shaoxing"},
-      {zh:"金华",en:"Jinhua"},{zh:"衢州",en:"Quzhou"},{zh:"舟山",en:"Zhoushan"},{zh:"台州",en:"Taizhou"},{zh:"丽水",en:"Lishui"},
-    ]},
-    { zh:"江苏省", en:"Jiangsu", cities:[
-      {zh:"南京",en:"Nanjing"},{zh:"苏州",en:"Suzhou"},{zh:"无锡",en:"Wuxi"},{zh:"南通",en:"Nantong"},{zh:"常州",en:"Changzhou"},{zh:"扬州",en:"Yangzhou"},
-      {zh:"徐州",en:"Xuzhou"},{zh:"盐城",en:"Yancheng"},{zh:"镇江",en:"Zhenjiang"},{zh:"泰州",en:"Taizhou"},{zh:"宿迁",en:"Suqian"},
-    ]},
-    { zh:"四川省", en:"Sichuan", cities:[
-      {zh:"成都",en:"Chengdu"},{zh:"绵阳",en:"Mianyang"},{zh:"德阳",en:"Deyang"},{zh:"宜宾",en:"Yibin"},{zh:"乐山",en:"Leshan"},{zh:"自贡",en:"Zigong"},
-      {zh:"泸州",en:"Luzhou"},{zh:"达州",en:"Dazhou"},{zh:"南充",en:"Nanchong"},{zh:"广安",en:"Guang'an"},{zh:"遂宁",en:"Suining"},
-    ]},
-    { zh:"湖北省", en:"Hubei", cities:[
-      {zh:"武汉",en:"Wuhan"},{zh:"宜昌",en:"Yichang"},{zh:"襄阳",en:"Xiangyang"},{zh:"荆州",en:"Jingzhou"},{zh:"黄石",en:"Huangshi"},{zh:"十堰",en:"Shiyan"},{zh:"荆门",en:"Jingmen"},
-    ]},
-    { zh:"湖南省", en:"Hunan", cities:[
-      {zh:"长沙",en:"Changsha"},{zh:"株洲",en:"Zhuzhou"},{zh:"湘潭",en:"Xiangtan"},{zh:"衡阳",en:"Hengyang"},{zh:"岳阳",en:"Yueyang"},{zh:"常德",en:"Changde"},
-    ]},
-    { zh:"陕西省", en:"Shaanxi", cities:[
-      {zh:"西安",en:"Xi'an"},{zh:"咸阳",en:"Xianyang"},{zh:"宝鸡",en:"Baoji"},{zh:"汉中",en:"Hanzhong"},{zh:"渭南",en:"Weinan"},{zh:"延安",en:"Yan'an"},
-    ]},
-    { zh:"山东省", en:"Shandong", cities:[
-      {zh:"青岛",en:"Qingdao"},{zh:"济南",en:"Jinan"},{zh:"烟台",en:"Yantai"},{zh:"潍坊",en:"Weifang"},{zh:"临沂",en:"Linyi"},{zh:"淄博",en:"Zibo"},
-      {zh:"威海",en:"Weihai"},{zh:"日照",en:"Rizhao"},{zh:"济宁",en:"Jining"},{zh:"泰安",en:"Tai'an"},
-    ]},
-    { zh:"辽宁省", en:"Liaoning", cities:[
-      {zh:"大连",en:"Dalian"},{zh:"沈阳",en:"Shenyang"},{zh:"鞍山",en:"Anshan"},{zh:"抚顺",en:"Fushun"},{zh:"本溪",en:"Benxi"},{zh:"锦州",en:"Jinzhou"},
-    ]},
-    { zh:"福建省", en:"Fujian", cities:[
-      {zh:"厦门",en:"Xiamen"},{zh:"福州",en:"Fuzhou"},{zh:"泉州",en:"Quanzhou"},{zh:"漳州",en:"Zhangzhou"},{zh:"莆田",en:"Putian"},{zh:"南平",en:"Nanping"},
-    ]},
-    { zh:"云南省", en:"Yunnan", cities:[
-      {zh:"昆明",en:"Kunming"},{zh:"大理",en:"Dali"},{zh:"丽江",en:"Lijiang"},{zh:"曲靖",en:"Qujing"},{zh:"玉溪",en:"Yuxi"},{zh:"西双版纳",en:"Xishuangbanna"},
-    ]},
-    { zh:"黑龙江省", en:"Heilongjiang", cities:[
-      {zh:"哈尔滨",en:"Harbin"},{zh:"大庆",en:"Daqing"},{zh:"齐齐哈尔",en:"Qiqihar"},{zh:"牡丹江",en:"Mudanjiang"},
-    ]},
-    { zh:"安徽省", en:"Anhui", cities:[
-      {zh:"合肥",en:"Hefei"},{zh:"芜湖",en:"Wuhu"},{zh:"马鞍山",en:"Ma'anshan"},{zh:"安庆",en:"Anqing"},{zh:"蚌埠",en:"Bengbu"},
-    ]},
-    { zh:"河南省", en:"Henan", cities:[
-      {zh:"郑州",en:"Zhengzhou"},{zh:"洛阳",en:"Luoyang"},{zh:"开封",en:"Kaifeng"},{zh:"南阳",en:"Nanyang"},{zh:"新乡",en:"Xinxiang"},{zh:"许昌",en:"Xuchang"},
-    ]},
-    { zh:"海南省", en:"Hainan", cities:[
-      {zh:"三亚",en:"Sanya"},{zh:"海口",en:"Haikou"},{zh:"琼海",en:"Qionghai"},{zh:"文昌",en:"Wenchang"},
-    ]},
-    { zh:"新疆", en:"Xinjiang", cities:[
-      {zh:"乌鲁木齐",en:"Ürümqi"},{zh:"喀什",en:"Kashgar"},{zh:"克拉玛依",en:"Karamay"},{zh:"伊宁",en:"Yining"},
-    ]},
-    { zh:"西藏", en:"Tibet", cities:[
-      {zh:"拉萨",en:"Lhasa"},{zh:"日喀则",en:"Shigatse"},{zh:"林芝",en:"Nyingchi"},
-    ]},
-    { zh:"内蒙古", en:"Inner Mongolia", cities:[
-      {zh:"呼和浩特",en:"Hohhot"},{zh:"包头",en:"Baotou"},{zh:"赤峰",en:"Chifeng"},{zh:"鄂尔多斯",en:"Ordos"},
-    ]},
-    { zh:"河北省", en:"Hebei", cities:[
-      {zh:"石家庄",en:"Shijiazhuang"},{zh:"唐山",en:"Tangshan"},{zh:"保定",en:"Baoding"},{zh:"秦皇岛",en:"Qinhuangdao"},{zh:"邯郸",en:"Handan"},
-    ]},
-    { zh:"山西省", en:"Shanxi", cities:[
-      {zh:"太原",en:"Taiyuan"},{zh:"大同",en:"Datong"},{zh:"运城",en:"Yuncheng"},{zh:"临汾",en:"Linfen"},
-    ]},
-    { zh:"吉林省", en:"Jilin", cities:[
-      {zh:"长春",en:"Changchun"},{zh:"吉林市",en:"Jilin City"},{zh:"延吉",en:"Yanji"},
-    ]},
-    { zh:"广西", en:"Guangxi", cities:[
-      {zh:"南宁",en:"Nanning"},{zh:"桂林",en:"Guilin"},{zh:"柳州",en:"Liuzhou"},{zh:"北海",en:"Beihai"},
-    ]},
-    { zh:"江西省", en:"Jiangxi", cities:[
-      {zh:"南昌",en:"Nanchang"},{zh:"赣州",en:"Ganzhou"},{zh:"景德镇",en:"Jingdezhen"},{zh:"九江",en:"Jiujiang"},
-    ]},
-    { zh:"贵州省", en:"Guizhou", cities:[
-      {zh:"贵阳",en:"Guiyang"},{zh:"遵义",en:"Zunyi"},{zh:"安顺",en:"Anshun"},
-    ]},
-    { zh:"甘肃省", en:"Gansu", cities:[
-      {zh:"兰州",en:"Lanzhou"},{zh:"天水",en:"Tianshui"},{zh:"嘉峪关",en:"Jiayuguan"},
-    ]},
-    { zh:"宁夏", en:"Ningxia", cities:[
-      {zh:"银川",en:"Yinchuan"},{zh:"石嘴山",en:"Shizuishan"},
-    ]},
-    { zh:"青海省", en:"Qinghai", cities:[
-      {zh:"西宁",en:"Xining"},{zh:"格尔木",en:"Golmud"},
-    ]},
-  ],
-  overseas: [
-    { group:"港澳台 HK · Macau · Taiwan", cities:[
-      {zh:"香港",en:"Hong Kong"},{zh:"澳门",en:"Macau"},{zh:"台北",en:"Taipei"},{zh:"台中",en:"Taichung"},{zh:"高雄",en:"Kaohsiung"},{zh:"台南",en:"Tainan"},
-    ]},
-    { group:"日韩 Japan · Korea", cities:[
-      {zh:"东京",en:"Tokyo"},{zh:"大阪",en:"Osaka"},{zh:"京都",en:"Kyoto"},{zh:"横滨",en:"Yokohama"},{zh:"神户",en:"Kobe"},{zh:"福冈",en:"Fukuoka"},
-      {zh:"首尔",en:"Seoul"},{zh:"釜山",en:"Busan"},{zh:"济州",en:"Jeju"},
-    ]},
-    { group:"东南亚 Southeast Asia", cities:[
-      {zh:"新加坡",en:"Singapore"},{zh:"曼谷",en:"Bangkok"},{zh:"吉隆坡",en:"Kuala Lumpur"},{zh:"雅加达",en:"Jakarta"},
-      {zh:"马尼拉",en:"Manila"},{zh:"河内",en:"Hanoi"},{zh:"胡志明市",en:"Ho Chi Minh City"},{zh:"巴厘岛",en:"Bali"},
-    ]},
-    { group:"中东·南亚 Middle East · South Asia", cities:[
-      {zh:"迪拜",en:"Dubai"},{zh:"阿布扎比",en:"Abu Dhabi"},{zh:"孟买",en:"Mumbai"},{zh:"德里",en:"Delhi"},{zh:"班加罗尔",en:"Bangalore"},
-    ]},
-    { group:"欧洲 Europe", cities:[
-      {zh:"伦敦",en:"London"},{zh:"巴黎",en:"Paris"},{zh:"柏林",en:"Berlin"},{zh:"马德里",en:"Madrid"},{zh:"罗马",en:"Roma"},
-      {zh:"阿姆斯特丹",en:"Amsterdam"},{zh:"布鲁塞尔",en:"Brussels"},{zh:"维也纳",en:"Wien / Vienna"},{zh:"苏黎世",en:"Zürich"},
-      {zh:"日内瓦",en:"Genève / Geneva"},{zh:"巴塞罗那",en:"Barcelona"},{zh:"慕尼黑",en:"München / Munich"},
-      {zh:"法兰克福",en:"Frankfurt"},{zh:"米兰",en:"Milano / Milan"},{zh:"哥本哈根",en:"København / Copenhagen"},
-      {zh:"斯德哥尔摩",en:"Stockholm"},{zh:"赫尔辛基",en:"Helsinki"},{zh:"奥斯陆",en:"Oslo"},
-      {zh:"华沙",en:"Warszawa / Warsaw"},{zh:"布拉格",en:"Praha / Prague"},{zh:"布达佩斯",en:"Budapest"},
-      {zh:"莫斯科",en:"Москва / Moscow"},{zh:"圣彼得堡",en:"St. Petersburg"},
-    ]},
-    { group:"北美 North America", cities:[
-      {zh:"纽约",en:"New York"},{zh:"洛杉矶",en:"Los Angeles"},{zh:"旧金山",en:"San Francisco"},{zh:"芝加哥",en:"Chicago"},
-      {zh:"波士顿",en:"Boston"},{zh:"西雅图",en:"Seattle"},{zh:"迈阿密",en:"Miami"},{zh:"拉斯维加斯",en:"Las Vegas"},
-      {zh:"华盛顿",en:"Washington D.C."},{zh:"多伦多",en:"Toronto"},{zh:"温哥华",en:"Vancouver"},{zh:"蒙特利尔",en:"Montréal"},
-    ]},
-    { group:"中南美 Latin America", cities:[
-      {zh:"墨西哥城",en:"Ciudad de México"},{zh:"圣保罗",en:"São Paulo"},{zh:"里约热内卢",en:"Rio de Janeiro"},{zh:"布宜诺斯艾利斯",en:"Buenos Aires"},
-    ]},
-    { group:"大洋洲 Oceania", cities:[
-      {zh:"悉尼",en:"Sydney"},{zh:"墨尔本",en:"Melbourne"},{zh:"布里斯班",en:"Brisbane"},{zh:"珀斯",en:"Perth"},{zh:"奥克兰",en:"Auckland"},
-    ]},
-    { group:"非洲 Africa", cities:[
-      {zh:"开罗",en:"Cairo"},{zh:"约翰内斯堡",en:"Johannesburg"},{zh:"内罗毕",en:"Nairobi"},
-    ]},
-  ],
+// ── 地区选择：洲 → 国家 → 省/州 → 城市（数据在 geo-data.js 的 GEO_DATA）──
+// 每一级最后都有「自定义」：选了就直接输入城市名（不能有标点）。
+// 城市选项的 value 是中文城市名（房子档次评分按中文名判断），英文名放在 data-en 里。
+const _GEO_CUSTOM = "__custom__";
+// [层级, 下拉提示, 标题]：每一级的标题单独一行，放在自己的下拉框上面
+const _GEO_LEVELS = [
+  ["continent", "选择洲 / Select Continent...", "洲 Continent"],
+  ["country", "选择国家或地区 / Select Country or Region...", "国家/地区 Country/Region"],
+  ["division", "选择省或州 / Select Province or State...", "省/州 Province/State"],
+  ["city", "选择城市 / Select City...", "城市 City"],
+];
+const _geoPair = (s) => {
+  const [zh, en] = s.split("|");
+  return { zh, en };
 };
+const _geoCities = (s) => s.split(";").map(_geoPair);
 
 function buildCitySelectors(prefix) {
-  const provSel = document.getElementById(`${prefix}-province-select`);
-  const citySel = document.getElementById(`${prefix}-city-select`);
-  const cityWrap = document.getElementById(`${prefix}-city-select-wrap`);
-  if (!provSel || !citySel) return;
-
-  // Build province options
-  provSel.innerHTML = `<option value="" disabled selected hidden>选省份 / Select Province...</option>`;
-  const chinaGroup = document.createElement("optgroup");
-  chinaGroup.label = "中国内地 Mainland China";
-  CITY_DATA.china.forEach(p => {
-    const opt = document.createElement("option");
-    opt.value = "cn:" + p.zh;
-    opt.textContent = `${p.zh} ${p.en}`;
-    chinaGroup.appendChild(opt);
-  });
-  provSel.appendChild(chinaGroup);
-
-  CITY_DATA.overseas.forEach(region => {
-    const opt = document.createElement("option");
-    opt.value = "os:" + region.group;
-    opt.textContent = region.group;
-    provSel.appendChild(opt);
-  });
-
-  const customOpt = document.createElement("option");
-  customOpt.value = "custom";
-  customOpt.textContent = "自定义 Custom";
-  provSel.appendChild(customOpt);
+  const root = document.getElementById(`${prefix}-geo`);
+  if (!root) return;
+  root.innerHTML =
+    _GEO_LEVELS.map(([lv, , label], i) => `
+      <div id="${prefix}-${lv}-wrap" class="geo-level${i ? " hidden" : ""}">
+        <label>${label}</label>
+        <div class="nes-select">
+          <select id="${prefix}-${lv}-select" onchange="_onGeoChange('${prefix}','${lv}')"></select>
+        </div>
+      </div>`).join("") +
+    `<div id="${prefix}-city-custom-wrap" class="geo-level hidden">
+       <label>城市 City</label>
+       <input id="${prefix}-city-custom" class="nes-input hidden" type="text" maxlength="20"
+         placeholder="输入城市名（不能有标点）/ City name (no punctuation)" />
+     </div>`;
+  _attachNoPunct(document.getElementById(`${prefix}-city-custom`));
+  _fillGeoSelect(prefix, "continent", GEO_DATA.map(([name]) => _geoPair(name)));
 }
 
-function onProvinceSelectChange(prefix) {
-  const provSel = document.getElementById(`${prefix}-province-select`);
-  const citySel = document.getElementById(`${prefix}-city-select`);
-  const cityWrap = document.getElementById(`${prefix}-city-select-wrap`);
-  const customInput = document.getElementById(`${prefix}-city-custom`);
-  if (!provSel || !citySel) return;
+// 填一级下拉。前三级 value 用序号；城市 value 用中文名
+function _fillGeoSelect(prefix, lv, items) {
+  const sel = document.getElementById(`${prefix}-${lv}-select`);
+  const ph = _GEO_LEVELS.find(([l]) => l === lv)[1];
+  sel.innerHTML = `<option value="" disabled selected hidden>${ph}</option>`;
+  items.forEach((it, i) => {
+    const opt = document.createElement("option");
+    opt.value = lv === "city" ? it.zh : String(i);
+    // 用户自定义加进来的地名只有一种写法：原样显示，不按中英拆
+    opt.textContent = it.en ? `${it.zh} ${it.en}` : it.zh;
+    if (!it.en) opt.dataset.noi18n = "";
+    if (lv === "city" && it.en) opt.dataset.en = it.en;
+    sel.appendChild(opt);
+  });
+  const custom = document.createElement("option");
+  custom.value = _GEO_CUSTOM;
+  custom.textContent = "自定义 Custom";
+  sel.appendChild(custom);
+  document.getElementById(`${prefix}-${lv}-wrap`).classList.remove("hidden");
+}
 
-  const val = provSel.value;
-  if (val === "custom") {
-    if (cityWrap) cityWrap.classList.add("hidden");
-    if (customInput) customInput.classList.remove("hidden");
+function _onGeoChange(prefix, lv) {
+  const idx = _GEO_LEVELS.findIndex(([l]) => l === lv);
+  const v = document.getElementById(`${prefix}-${lv}-select`).value;
+  const customInput = document.getElementById(`${prefix}-city-custom`);
+
+  // 更深的层级全部收起、清空
+  _GEO_LEVELS.slice(idx + 1).forEach(([l]) => {
+    document.getElementById(`${prefix}-${l}-wrap`).classList.add("hidden");
+    document.getElementById(`${prefix}-${l}-select`).innerHTML = "";
+  });
+
+  // 任何一级选「自定义」→ 直接输入城市名（带「城市 City」标题）
+  const customWrap = document.getElementById(`${prefix}-city-custom-wrap`);
+  if (v === _GEO_CUSTOM) {
+    customWrap.classList.remove("hidden");
+    customInput.classList.remove("hidden");
     return;
   }
-  if (customInput) customInput.classList.add("hidden");
+  customWrap.classList.add("hidden");
+  customInput.classList.add("hidden");
+  customInput.value = "";
 
-  let cities = [];
-  let isMunicipality = false;
-  let municipalityCity = null;
-  if (val.startsWith("cn:")) {
-    const zhName = val.slice(3);
-    const prov = CITY_DATA.china.find(p => p.zh === zhName);
-    if (prov) {
-      cities = prov.cities;
-      isMunicipality = !!prov.municipality;
-      if (isMunicipality) municipalityCity = prov.cities[0]; // e.g. {zh:"上海", en:"Shanghai"}
+  const ci = document.getElementById(`${prefix}-continent-select`).value;
+  if (lv === "continent") {
+    _fillGeoSelect(prefix, "country", GEO_DATA[ci][1].map(([name]) => _geoPair(name)));
+  } else if (lv === "country") {
+    const body = GEO_DATA[ci][1][v][1];
+    if (Array.isArray(body)) _fillGeoSelect(prefix, "division", body.map(([name]) => _geoPair(name)));
+    else _fillGeoSelect(prefix, "city", _geoCities(body));
+  } else if (lv === "division") {
+    const country = document.getElementById(`${prefix}-country-select`).value;
+    const [, cities, direct] = GEO_DATA[ci][1][country][1][v];
+    _fillGeoSelect(prefix, "city", _geoCities(cities));
+    if (direct) {
+      // 直辖（如北京市、香港）：城市就是它自己，自动选好、不再显示城市下拉
+      const citySel = document.getElementById(`${prefix}-city-select`);
+      citySel.selectedIndex = 1;
+      document.getElementById(`${prefix}-city-wrap`).classList.add("hidden");
     }
-  } else if (val.startsWith("os:")) {
-    const groupName = val.slice(3);
-    const region = CITY_DATA.overseas.find(r => r.group === groupName);
-    if (region) cities = region.cities;
   }
+}
 
-  if (isMunicipality && municipalityCity) {
-    // Auto-set city value into the select (hidden), skip showing the dropdown
-    if (cityWrap) cityWrap.classList.add("hidden");
-    if (customInput) customInput.classList.add("hidden");
-    citySel.innerHTML = "";
-    const opt = document.createElement("option");
-    opt.value = municipalityCity.zh;
-    opt.textContent = `${municipalityCity.zh} ${municipalityCity.en}`;
-    citySel.appendChild(opt);
-    citySel.value = municipalityCity.zh;
-  } else {
-    citySel.innerHTML = `<option value="" disabled selected hidden>选城市 / Select City...</option>`;
-    cities.forEach(c => {
-      const opt = document.createElement("option");
-      opt.value = c.zh;
-      opt.textContent = `${c.zh} ${c.en}`;
-      citySel.appendChild(opt);
-    });
-    if (cityWrap) cityWrap.classList.remove("hidden");
-    citySel.value = "";
+// ── 通用：页面上的项按顺序一条一条出现，每次只多出下一项 ──
+// steps: [{ el: 元素 id, value: 值 input id, applies?: () => 是否适用, label?: 提示用名字 }]
+// 不适用的项直接隐藏、不挡后面；返回第一个还没填的项（用于检查）
+const _val = (id) => document.getElementById(id)?.value || "";
+function _applySteps(steps, startReady) {
+  let prevDone = startReady;
+  let firstMissing = null;
+  for (const st of steps) {
+    const el = document.getElementById(st.el);
+    if (st.applies && !st.applies()) {
+      el?.classList.add("hidden");
+      continue;
+    }
+    el?.classList.toggle("hidden", !prevDone);
+    const has = !!_val(st.value);
+    if (!has && !firstMissing) firstMissing = st;
+    prevDone = prevDone && has;
   }
-  onCitySelectChange(prefix);
+  return firstMissing;
+}
+// ── 填写页：新出现的项如果在可视范围外（被挡住/在下面），自动滚到能看见 ──
+// 监听所有填写页里「hidden 被去掉」的元素；同一轮里出现好几个时，滚到最后出现的那个
+(() => {
+  let target = null;
+  new MutationObserver((muts) => {
+    for (const m of muts) {
+      const el = m.target;
+      if (!(el instanceof HTMLElement)) continue;
+      if (!(m.oldValue || "").split(/\s+/).includes("hidden") || el.classList.contains("hidden")) continue;
+      const scroller = el.closest(".setup-page .setup-content");
+      if (!scroller || !el.closest(".page.active")) continue;
+      target = el;
+    }
+    if (!target) return;
+    const el = target;
+    target = null;
+    // 等这一轮显示/隐藏都排完再滚
+    setTimeout(() => {
+      const scroller = el.closest(".setup-content");
+      if (!scroller || el.offsetParent === null) return;
+      const box = scroller.getBoundingClientRect();
+      const r = el.getBoundingClientRect();
+      if (r.bottom > box.bottom) scroller.scrollBy({ top: r.bottom - box.bottom + 12, behavior: "smooth" });
+      else if (r.top < box.top) scroller.scrollBy({ top: r.top - box.top - 12, behavior: "smooth" });
+    }, 30);
+  }).observe(document.body, { attributes: true, attributeFilter: ["class"], attributeOldValue: true, subtree: true });
+})();
+
+// 页面里任何骰子结果变了 / 下拉或输入变了，就重新排一次
+function _watchSteps(sectionId, update) {
+  const sec = document.getElementById(sectionId);
+  if (!sec) return;
+  sec.addEventListener("change", update);
+  sec.addEventListener("input", update);
+  new MutationObserver((muts) => {
+    if (muts.some((m) => (m.target.nodeType === 1 ? m.target : m.target.parentElement)?.closest(".dice-result-input"))) update();
+  }).observe(sec, { childList: true, characterData: true, subtree: true });
+  update();
+}
+
+// ── 房子页 ──
+const _HOUSE_VILLA_TYPES = ["别墅", "四合院", "老洋房"];
+const _HOUSE_APT_TYPES = ["公寓", "大平层", "普通住宅", "石库门"];
+const _HOUSE_STEPS = [
+  { el: "house-step-district", value: "house-district", label: "区域", labelEn: "District" },
+  { el: "house-step-type", value: "house-type", label: "房屋类型", labelEn: "House type" },
+  { el: "house-villa-wrapper", value: "house-villa-floors", label: "别墅共几层", labelEn: "Villa floors", applies: () => _HOUSE_VILLA_TYPES.includes(_val("house-type")) },
+  { el: "house-garden-section", value: "house-garden", label: "有院子吗", labelEn: "Garden", applies: () => _HOUSE_VILLA_TYPES.includes(_val("house-type")) },
+  { el: "house-step-area", value: "house-area", label: "面积", labelEn: "Area" },
+  { el: "house-apt-floors-wrapper", value: "house-apt-floor", label: "住在第几层", labelEn: "Floor", applies: () => _HOUSE_APT_TYPES.includes(_val("house-type")) },
+  { el: "house-apt-total-section", value: "house-apt-total", label: "一共几层", labelEn: "Total floors", applies: () => _HOUSE_APT_TYPES.includes(_val("house-type")) },
+  { el: "house-step-tenure", value: "house-tenure", label: "租还是买", labelEn: "Rent or buy" },
+  { el: "house-ownership-section", value: "house-ownership", label: "产权归属", labelEn: "Ownership", applies: () => _val("house-tenure") === "购买" },
+  { el: "house-mortgage-wrapper", value: "house-mortgage", label: "有房贷吗", labelEn: "Mortgage", applies: () => _val("house-tenure") === "购买" },
+  { el: "house-price-wrapper", value: "house-price", label: "房价", labelEn: "Price" },
+];
+function _updateHouseSteps() {
+  // 第一项要等城市选好；返回第一个还没填的项（检查用）
+  const missing = _applySteps(_HOUSE_STEPS, !!getHousingCityValue("house"));
+  // 价格标题：租房是「租金」，买房是「房价」
+  const priceLabel = document.getElementById("house-price-label");
+  if (priceLabel) priceLabel.textContent = _val("house-tenure") === "购买" ? "房价 Price" : "租金 Rent";
+  if (missing?.value === "house-price" && _val("house-tenure") !== "购买") return { ...missing, label: "租金", labelEn: "Rent" };
+  return missing;
+}
+function _watchHouseSteps() {
+  _watchSteps("profile-housing", _updateHouseSteps);
+}
+
+// ── 车辆页：类型 → 品牌（普通车/豪车才有）→ 数量 → 价值 ──
+const _VEHICLE_STEPS = [
+  { el: "vehicle-car-model-wrapper", value: "vehicle-model",
+    applies: () => /^(普通车|豪车)/.test(_val("vehicle-types-hidden")) },
+  { el: "vehicle-step-count", value: "vehicle-count" },
+  { el: "vehicle-price-wrapper", value: "vehicle-price" },
+];
+function _updateVehicleSteps() {
+  _applySteps(_VEHICLE_STEPS, !!_val("vehicle-types-hidden"));
+}
+
+// ── 自定义选项库：大家自定义过的性别 / 性取向 / 城市（服务器 /custom-options）──
+// 页面加载时合进下拉选项；生成档案时把这次用到的自定义内容存进去（_saveCustomOptions）
+const _OTHER_GEO = "其他|Other";
+
+async function loadCustomOptions() {
+  try {
+    const opts = await (await api("/custom-options")).json();
+    (opts.gender || []).forEach((v) => _addCustomSelectOption("petGender", v));
+    (opts.orientation || []).forEach((v) => _addCustomSelectOption("petOrientation", v));
+    (opts.city || []).forEach(_mergeCustomCity);
+  } catch (_) {}
+}
+
+// 加在「自定义」选项前面；文字是用户写的，原样显示
+function _addCustomSelectOption(selectId, value) {
+  const sel = document.getElementById(selectId);
+  if (!sel || !value || [...sel.options].some((o) => o.value === value)) return;
+  const opt = document.createElement("option");
+  opt.value = value;
+  opt.textContent = value;
+  opt.dataset.noi18n = "";
+  sel.insertBefore(opt, sel.querySelector('option[value="自定义/Custom"]'));
+}
+
+// 自定义城市合进 GEO_DATA：path 是选「自定义」之前已经选好的几级（中文名）。
+// 缺的那几级放进「其他 Other」，比如只选了洲 → 洲 / 其他 / 城市
+function _mergeCustomCity({ name, path = [] }) {
+  if (!name) return;
+  const zhOf = (node) => node[0].split("|")[0];
+  const findOrAdd = (list, zh, make) => {
+    let node = zh && list.find((n) => zhOf(n) === zh);
+    if (!node) {
+      node = list.find((n) => n[0] === _OTHER_GEO);
+      if (!node) list.push((node = make()));
+    }
+    return node;
+  };
+  const addCity = (holder, idx) => {
+    const cities = holder[idx] ? holder[idx].split(";") : [];
+    if (!cities.some((c) => c.split("|")[0] === name)) holder[idx] = [...cities, name].join(";");
+  };
+  const continent = findOrAdd(GEO_DATA, path[0], () => [_OTHER_GEO, []]);
+  const country = findOrAdd(continent[1], path[1], () => [_OTHER_GEO, ""]);
+  if (typeof country[1] === "string") return addCity(country, 1);
+  const division = findOrAdd(country[1], path[2], () => [_OTHER_GEO, ""]);
+  if (division[2]) return; // 直辖市（如北京市）不会有自定义城市
+  addCity(division, 1);
+}
+
+// 选「自定义」之前已经选好的洲 / 国家 / 省（中文名）
+function _geoPath(prefix) {
+  const path = [];
+  let node = { 1: GEO_DATA };
+  for (const lv of ["continent", "country", "division"]) {
+    const sel = document.getElementById(`${prefix}-${lv}-select`);
+    const wrap = document.getElementById(`${prefix}-${lv}-wrap`);
+    if (!sel || wrap?.classList.contains("hidden") || !sel.value || sel.value === _GEO_CUSTOM) break;
+    node = node[1][Number(sel.value)];
+    if (!node) break;
+    path.push(node[0].split("|")[0]);
+    if (!Array.isArray(node[1])) break;
+  }
+  return path;
+}
+
+// 生成档案后：这次用到的自定义性别 / 性取向 / 城市存进系统
+function _saveCustomOptions() {
+  const post = (body) =>
+    api("/custom-options", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    }).catch(() => {});
+  const body = {};
+  if (_val("petGender") === "自定义/Custom") body.gender = getCustomFieldValue("petGender", "gender-custom");
+  if (_val("petOrientation") === "自定义/Custom") body.orientation = getCustomFieldValue("petOrientation", "orientation-custom");
+  if (body.gender || body.orientation) post(body);
+  ["house", "parents-father", "parents-mother"].forEach((prefix) => {
+    const input = document.getElementById(`${prefix}-city-custom`);
+    if (!input || input.classList.contains("hidden") || input.closest(".hidden")) return;
+    const name = getHousingCityValue(prefix);
+    if (name) post({ city: { name, path: _geoPath(prefix) } });
+  });
+}
+
+// 城市中文名（用于存档和评分）；自定义时是输入的文字
+function getHousingCityValue(prefix) {
+  const customInput = document.getElementById(`${prefix}-city-custom`);
+  if (customInput && !customInput.classList.contains("hidden")) {
+    return _stripPunct(customInput.value).trim();
+  }
+  return document.getElementById(`${prefix}-city-select`)?.value || "";
+}
+
+// 选中城市所在国家的中文名；国家这一级（或更上一级）选了自定义时返回 ""
+function getHousingCountry(prefix) {
+  const ci = document.getElementById(`${prefix}-continent-select`)?.value;
+  const co = document.getElementById(`${prefix}-country-select`)?.value;
+  if (!ci || !co || ci === _GEO_CUSTOM || co === _GEO_CUSTOM) return "";
+  return GEO_DATA[ci]?.[1]?.[co]?.[0]?.split("|")[0] || "";
+}
+
+// 显示用的城市名：「中文 / English」；自定义时是输入的文字
+function getCityDisplayName(prefix) {
+  const zh = getHousingCityValue(prefix);
+  if (!zh) return "";
+  const customInput = document.getElementById(`${prefix}-city-custom`);
+  if (customInput && !customInput.classList.contains("hidden")) return zh;
+  const sel = document.getElementById(`${prefix}-city-select`);
+  const en = sel?.options[sel.selectedIndex]?.dataset.en;
+  return en ? `${zh} / ${en}` : zh;
 }
 
 // ── Housing & income tier data ─────────────────────────────────
@@ -1920,21 +2426,15 @@ const HOUSING_TIERS = {
     5: "3w-10w/月",
     6: "10w+/月",
   },
-  marriage: {
-    1: "单身/Single",
-    2: "单身/Single",
-    3: "离异/Divorced",
-    4: "已配对/Mated",
-    5: "已配对/Mated",
-    6: "开放关系/Open Relationship",
-  },
+  // 还有几段其他关系：都是确切数字（数组 = 这一档里随机取一个）
+  shipCount: { 1: "0", 2: "1", 3: "2", 4: "3", 5: "4", 6: ["5", "6", "7", "8"] },
   pastRelCount: {
     1: "0",
-    2: "1-2",
-    3: "3-4",
-    4: "5-6",
-    5: "7-10",
-    6: "10+",
+    2: ["1", "2"],
+    3: ["3", "4"],
+    4: ["5", "6"],
+    5: ["7", "8", "9", "10"],
+    6: ["11", "12", "13", "15", "20"],
   },
   exContact: {
     1: "完全断联/No Contact",
@@ -1966,55 +2466,7 @@ const HOUSING_TIERS = {
     3: "0",
     4: "1",
     5: "2",
-    6: "3+",
-  },
-  currentPartner: {
-    1: "无/None",
-    2: "无/None",
-    3: "无/None",
-    4: "雄友 / Boyfriend",
-    5: "雌友 / Girlfriend",
-    6: "伴侣/Partner",
-  },
-  ambiguousCount: {
-    1: "0",
-    2: "0",
-    3: "1",
-    4: "2",
-    5: "3",
-    6: "很多/Many",
-  },
-  foreignPartner: {
-    1: "否/No",
-    2: "否/No",
-    3: "否/No",
-    4: "否/No",
-    5: "是/Yes",
-    6: "是/Yes",
-  },
-  otherCityPartner: {
-    1: "否/No",
-    2: "否/No",
-    3: "同省/Same Province",
-    4: "异省/Diff Province",
-    5: "异省/Diff Province",
-    6: "多个/Multiple",
-  },
-  partnerCount: {
-    1: "1",
-    2: "1",
-    3: "2",
-    4: "2",
-    5: "3",
-    6: "3+",
-  },
-  secretPartner: {
-    1: "否/No",
-    2: "否/No",
-    3: "否/No",
-    4: "否/No",
-    5: "是/Yes",
-    6: "是/Yes",
+    6: ["3", "4", "5"],
   },
   hasCrush: {
     1: "没有/None",
@@ -2024,21 +2476,22 @@ const HOUSING_TIERS = {
     5: "暗恋中/Secretly",
     6: "强烈迷恋/Intensely",
   },
+  // 每一面有几个选项，摇到那一面时随机取一个
   datingPurpose: {
-    1: "孤独/Lonely",
-    2: "炮友/FWB",
-    3: "一夜情/ONS",
-    4: "好玩/Just for Fun",
-    5: "三人行/Threesome",
-    6: "和伴侣吵架了/Fight w/ Partner",
+    1: ["孤独/Lonely", "打发时间/Killing Time"],
+    2: ["炮友/FWB", "刚分手/Just Broke Up"],
+    3: ["一夜情/ONS", "探索一下/Just Exploring"],
+    4: ["好玩/Just for Fun", "想认真恋爱/Looking for Love"],
+    5: ["三人行/Threesome", "被朋友安利/Friend's Rec"],
+    6: ["和伴侣吵架了/Fight w/ Partner", "想认真恋爱/Looking for Love"],
   },
   relationshipGoal: {
-    1: "结交朋友/Make Friends",
-    2: "长期炮友/Long-term FWB",
-    3: "搭子/Buddy",
-    4: "雌雄伴侣 / Dating",
-    5: "结婚对象/Marriage",
-    6: "随缘/Whatever",
+    1: ["结交朋友/Make Friends", "短期交友/Short-term Fling"],
+    2: ["长期固炮/Regular FWB", "床搭子/Bed Buddy"],
+    3: ["搭子/Buddy", "饭搭子/Food Buddy", "唇友/Kissing Friend"],
+    4: ["雌雄伴侣 / Dating", "严肃恋爱/Serious Relationship"],
+    5: ["结婚对象/Marriage", "灵魂伴侣/Soulmate", "柏拉图/Platonic"],
+    6: ["随缘/Whatever", "网恋/Online Romance"],
   },
   education: {
     1: "小学",
@@ -2064,7 +2517,6 @@ const HOUSING_TIERS = {
   aptFloor:    { 1: "1-5层", 2: "6-10层", 3: "11-20层", 4: "21-30层", 5: "31-40层", 6: "40层以上" },
   aptTotal:    { 1: "6层以下", 2: "10层", 3: "18层", 4: "28层", 5: "35层", 6: "50层以上" },
   vehicleCount: { 1: "1", 2: "1", 3: "2", 4: "2", 5: "3", 6: "4+" },
-  vehiclePrice: { 1: "5w以下", 2: "5w-15w", 3: "15w-30w", 4: "30w-80w", 5: "80w-300w", 6: "300w+" },
   vehiclePriceByType: {
     bicycle:    { 1: "500元以下", 2: "500-2000元", 3: "2000元-1w", 4: "1w-5w", 5: "5w-30w", 6: "30w+" },
     ebike:      { 1: "2000元以下", 2: "2000-5000元", 3: "5000元-1w", 4: "1w-2w", 5: "2w-5w", 6: "5w+" },
@@ -2207,6 +2659,7 @@ const SCORE_DEDUCTIONS = {
   "1000w": 0,
   "1500w": +2,
   "2000w": +5,
+  "3000w": +12,
   "3000w+": +12,
   "5000w+": +18,
   // 月租价格 (by type)
@@ -2237,26 +2690,27 @@ const SCORE_DEDUCTIONS = {
   大专: -1,
   本科: 0,
   "硕士+": +8,
-  // 职业 / Occupation — only 企业高管 gets bonus
-  "无业 / Unemployed": -10,
-  "体力劳动 / Manual Labor": -5,
-  "服务业 / Service Industry": -2,
-  "办公室职员 / Office Worker": 0,
-  "专业人士 / Professional": 0,
-  "企业高管 / Executive": +12,
+  // 职业 / Occupation — only 企业高管 gets bonus（同一档的兽人职业分数相同）
+  "无业 / Unemployed": -10, "洞穴看守 / Cave Guard": -10, "树懒学徒 / Sloth Apprentice": -10,
+  "体力劳动 / Manual Labor": -5, "搬运工 / Porter": -5, "挖洞工 / Burrow Digger": -5, "伐木兽 / Lumberbeast": -5,
+  "服务业 / Service Industry": -2, "毛发造型师 / Fur Stylist": -2, "嗅觉侦探 / Scent Detective": -2, "领地中介 / Territory Agent": -2,
+  "办公室职员 / Office Worker": 0, "族群书记 / Clan Scribe": 0, "信息素分析员 / Pheromone Analyst": 0,
+  "专业人士 / Professional": 0, "兽医 / Vet": 0, "族群顾问 / Pack Advisor": 0, "猎物评估师 / Prey Assessor": 0,
+  "企业高管 / Executive": +12, "首席领地官 / Chief Territory Officer": +12, "族群酋长助理 / Alpha Assistant": +12,
   // 婚恋状况 / Relationship status — only 单身 gets bonus
   "单身/Single": +5,
+  "恋爱中/Dating": -5,
+  "已婚/Married": -5,
   "离异/Divorced": -3,
   "已配对/Mated": -5,
   "开放关系/Open Relationship": -8,
-  // 车辆价值 / Vehicle value — real price tiers
-  "5w以下": -8, "5w-15w": -3, "15w-30w": 0, "30w-80w": +3, "80w-300w": +8, "300w+": +15,
+  // 车辆价值 / Vehicle value — 按车型各自的价位
   // bicycle
   "500元以下": -8, "500-2000元": -6, "2000元-1w": -4, "1w-5w": -2, "5w-30w": 0, "30w+": +2,
   // ebike
   "2000元以下": -8, "2000-5000元": -6, "5000元-1w": -4, "1w-2w": -2, "2w-5w": 0, "5w+": +1,
-  // motorcycle
-  "5000元以下": -6, "5000元-2w": -3, "2w-5w": 0, "5w-15w": +2, "15w-50w": +5, "50w+": +8,
+  // motorcycle（"2w-5w" 和 ebike 共用上面那条）
+  "5000元以下": -6, "5000元-2w": -3, "5w-15w": +2, "15w-50w": +5, "50w+": +8,
   // regularCar
   "3w以下": -5, "3w-8w": -2, "8w-15w": 0, "15w-25w": +2, "25w-40w": +4, "40w-80w": +6,
   // luxuryCar
@@ -2304,197 +2758,6 @@ const MBTI_SCORES = {
 };
 
 const MAX_HOUSING_ROLLS = 3;
-
-// Bilingual display map for Chinese-only tier values
-const DISP = {
-  // house type (base)
-  下水管道: "下水管道 / Pipe Shack",
-  地下室: "地下室 / Basement",
-  普通住宅: "普通住宅 / Regular",
-  公寓: "公寓 / Apt",
-  大平层: "大平层 / Open Plan",
-  别墅: "别墅 / Villa",
-  // city/region special types
-  四合院: "四合院 / Courtyard House ✨",
-  老洋房: "老洋房 / Heritage Villa ✨",
-  石库门: "石库门 / Shikumen",
-  吊脚楼: "吊脚楼 / Stilt House",
-  蒙古包: "蒙古包 / Yurt",
-  水乡民居: "水乡民居 / Waterside Home",
-  窑洞: "窑洞 / Cave Dwelling",
-  平顶房: "平顶房 / Flat-roof House",
-  土楼: "土楼 / Earthen Tower",
-  碉房: "碉房 / Stone Tower House",
-  东北民居: "东北民居 / NE Homestead",
-  // garden
-  无院子: "无院子 / No Garden",
-  有院子: "有院子 / Garden ✨",
-  // tenure
-  租住中: "租住中 / Renting",
-  购买: "购买 / Owned",
-  // ownership
-  父母名下: "父母名下 / Parents",
-  自己名下: "自己名下 / Self ✨",
-  // mortgage
-  有房贷: "有房贷 / Mortgaged",
-  无房贷: "无房贷 / Paid Off ✨",
-  // education
-  小学: "小学 / Primary",
-  初中: "初中 / Middle",
-  高中: "高中 / High School",
-  大专: "大专 / Associate",
-  本科: "本科 / Bachelor",
-  "硕士+": "硕士+ / Master+",
-  // occupation
-  无业: "无业 / Unemployed",
-  体力劳动: "体力劳动 / Labor",
-  服务业: "服务业 / Service",
-  办公室职员: "办公室职员 / Office",
-  专业人士: "专业人士 / Professional",
-  企业高管: "企业高管 / Executive",
-  // income (dice)
-  "3k以下": "3k以下 / <¥3k",
-  "3k-8k": "3k-8k / ¥3k-8k",
-  "8k-15k": "8k-15k / ¥8k-15k",
-  "15k-30k": "15k-30k / ¥15k-30k",
-  "3w-10w/月": "3w-10w/月 / ¥30k-100k",
-  "10w+/月": "10w+/月 / ¥100k+",
-  // vehicle price
-  "5w以下": "5w以下 / <¥50k",
-  "5w-15w": "5w-15w / ¥50k-150k",
-  "15w-30w": "15w-30w / ¥150k-300k",
-  "30w-80w": "30w-80w / ¥300k-800k",
-  "80w-300w": "80w-300w / ¥800k-3M",
-  "300w+": "300w+ / ¥3M+",
-  // parents status
-  "都健在": "都健在 / Both Alive ✨",
-  "仅父亲健在": "仅父亲健在 / Father Alive",
-  "仅母亲健在": "仅母亲健在 / Mother Alive",
-  "均已故": "均已故 / Both Passed",
-  // siblings
-  "独生/Only Child": "独生 / Only Child",
-  "1个/1 Sibling": "1个兄弟姐妹 / 1 Sibling",
-  "2个/2 Siblings": "2个兄弟姐妹 / 2 Siblings",
-  "3个/3 Siblings": "3个兄弟姐妹 / 3 Siblings",
-  "4个+/4+ Siblings": "4个+兄弟姐妹 / 4+ Siblings",
-  "经济困难": "经济困难 / Struggling",
-  "普通": "普通 / Average",
-  "小康": "小康 / Comfortable",
-  "富裕": "富裕 / Wealthy",
-  "富裕✨": "富裕 ✨ / Very Wealthy ✨",
-  // district / neighborhood
-  "郊区": "郊区 / Suburb",
-  "老城区": "老城区 / Old Town",
-  "新区": "新区 / New District",
-  "学区": "学区 / School Zone",
-  "科技园区": "科技园区 / Tech Zone",
-  "市中心": "市中心 / City Center",
-  "滨水区": "滨水区 / Waterfront",
-  "豪华住宅区": "豪华住宅区 / Luxury Zone",
-  // apt floor
-  "1-5层": "1-5层",
-  "6-10层": "6-10层",
-  "11-20层": "11-20层",
-  "21-30层": "21-30层",
-  "31-40层": "31-40层",
-  "40层以上": "40层+",
-  // apt total floors
-  "6层以下": "共6层以下",
-  "10层": "共10层",
-  "18层": "共18层",
-  "28层": "共28层",
-  "35层": "共35层",
-  "50层以上": "共50层+",
-  // villa floors
-  "1层独栋": "1层独栋 / 1-Story",
-  "2层别墅": "2层别墅 / 2-Story Villa",
-  "3层别墅": "3层别墅 / 3-Story Villa",
-  "4层及以上": "4层及以上 / 4F+",
-  // house price (cheap tier)
-  "5w": "5w / ¥50k",
-  "10w": "10w / ¥100k",
-  "20w": "20w / ¥200k",
-  "30w": "30w / ¥300k",
-  "80w": "80w / ¥800k",
-  // house price (mid tier)
-  "200w": "200w / ¥2M",
-  "350w": "350w / ¥3.5M",
-  "600w": "600w / ¥6M",
-  "1500w": "1500w / ¥15M",
-  // house price (luxury tier)
-  "5000w+": "5000w+ / ¥50M+",
-  // vehicle price (bicycle)
-  "500元以下": "500元以下 / <¥500",
-  "500-2000元": "500-2000元 / ¥500-2k",
-  "2000元-1w": "2000元-1w / ¥2k-10k",
-  "1w-5w": "1w-5w / ¥10k-50k",
-  "5w-30w": "5w-30w / ¥50k-300k",
-  "30w+": "30w+ / ¥300k+",
-  // vehicle price (ebike)
-  "2000元以下": "2000元以下 / <¥2k",
-  "2000-5000元": "2000-5000元 / ¥2k-5k",
-  "5000元-1w": "5000元-1w / ¥5k-10k",
-  "1w-2w": "1w-2w / ¥10k-20k",
-  "2w-5w": "2w-5w / ¥20k-50k",
-  "5w+": "5w+ / ¥50k+",
-  // vehicle price (motorcycle)
-  "5000元以下": "5000元以下 / <¥5k",
-  "5000元-2w": "5000元-2w / ¥5k-20k",
-  "2w-5w": "2w-5w / ¥20k-50k",
-  "5w-15w": "5w-15w / ¥50k-150k",
-  "15w-50w": "15w-50w / ¥150k-500k",
-  "50w+": "50w+ / ¥500k+",
-  // vehicle price (regular car)
-  "3w以下": "3w以下 / <¥30k",
-  "3w-8w": "3w-8w / ¥30k-80k",
-  "8w-15w": "8w-15w / ¥80k-150k",
-  "15w-25w": "15w-25w / ¥150k-250k",
-  "25w-40w": "25w-40w / ¥250k-400k",
-  "40w-80w": "40w-80w / ¥400k-800k",
-  // vehicle price (luxury car)
-  "30w-60w": "30w-60w / ¥300k-600k",
-  "60w-100w": "60w-100w / ¥600k-1M",
-  "100w-200w": "100w-200w / ¥1M-2M",
-  "200w-500w": "200w-500w / ¥2M-5M",
-  "500w-1000w": "500w-1000w / ¥5M-10M",
-  "1000w+": "1000w+ / ¥10M+",
-  // extra edu
-  "博士/PhD": "博士 / PhD",
-  "硕士/Master": "硕士 / Master",
-  "本科/Bachelor": "本科 / Bachelor",
-  "大专/Associate": "大专 / Associate",
-  "高中/High School": "高中 / High School",
-  "初中/Middle School": "初中 / Middle School",
-  "小学/Primary": "小学 / Primary",
-  // marriage/sterilized
-  "单身/Single": "单身 / Single",
-  "已配对/Mated": "已配对 / Mated",
-  "开放关系/Open": "开放关系 / Open",
-  "开放关系/Open Relationship": "开放关系 / Open Rel.",
-  "离异/Divorced": "离异 / Divorced",
-  // orientation
-  "异性恋/Straight": "异性恋 / Straight",
-  "同性恋/Gay·Lesbian": "同性恋 / Gay & Lesbian",
-  "双性恋/Bisexual": "双性恋 / Bisexual",
-  "泛性恋/Pansexual": "泛性恋 / Pansexual",
-  "无性恋/Asexual": "无性恋 / Asexual",
-  "不透露/Prefer not to say": "不透露 / Prefer Not to Say",
-  "自定义/Custom": "自定义 / Custom",
-  // gender
-  "雄/Male": "雄 / Male",
-  "雌/Female": "雌 / Female",
-  "非二元/Non-binary": "非二元 / Non-binary",
-  // parents relationship (already has /)
-  "离婚/Divorced": "离婚 / Divorced",
-  "冷战/Cold War": "冷战 / Cold War",
-  "普通/Ordinary": "普通 / Ordinary",
-  "和睦/Harmonious": "和睦 / Harmonious",
-  "恩爱/Loving": "恩爱 / Loving",
-  "神仙眷侣/Perfect Couple ✨": "神仙眷侣 / Perfect Couple ✨",
-};
-function disp(v) {
-  return DISP[v] || v;
-}
 
 function getHouseTypeTier(city) {
   if (!city) return HOUSING_TIERS.type;
@@ -2551,7 +2814,7 @@ function rollHousingFieldDice(field, prefix) {
       let text = "";
 
       if (field === "type") {
-        const city = document.getElementById(`${prefix}-city-select`)?.value || "";
+        const city = getHousingCityValue(prefix);
         const typeTier = getHouseTypeTier(city);
         const rawValue = typeTier[roll];
         value = Array.isArray(rawValue) ? rawValue[Math.floor(Math.random() * rawValue.length)] : rawValue;
@@ -2559,15 +2822,7 @@ function rollHousingFieldDice(field, prefix) {
         document.getElementById(`${prefix}-type`).value = value;
         const isVilla = value === "别墅" || value === "四合院" || value === "老洋房";
         const isApt = value === "公寓" || value === "大平层" || value === "普通住宅" || value === "石库门";
-        document
-          .getElementById(`${prefix}-villa-wrapper`)
-          .classList.toggle("hidden", !isVilla);
-        document
-          .getElementById(`${prefix}-garden-section`)
-          .classList.toggle("hidden", !isVilla);
-        document
-          .getElementById(`${prefix}-apt-floors-wrapper`)
-          ?.classList.toggle("hidden", !isApt);
+        // 别墅层数 / 院子 / 楼层 什么时候出现由 _updateHouseSteps 决定（一项一项出现）
         if (!isVilla) {
           document.getElementById(`${prefix}-garden`).value = "";
           document.getElementById(`${prefix}-garden-display`).textContent = "—";
@@ -2590,19 +2845,15 @@ function rollHousingFieldDice(field, prefix) {
             if (disp2) disp2.textContent = "—";
             if (b) { b.dataset.rolls = "0"; b.disabled = false; b.classList.remove("dice-exhausted"); b.innerHTML = diceFaceImg(1, 4); }
           });
-          const totalSec = document.getElementById(`${prefix}-apt-total-section`);
-          if (totalSec) totalSec.classList.add("hidden");
         }
-        // Show price wrapper and set price tier key based on house type
+        // 记下价位档次（按房屋类型）；价格框本身最后才出现
         const priceTierKey = (value === "下水管道" || value === "地下室") ? "cheap"
           : (value === "别墅" || value === "四合院" || value === "老洋房") ? "luxury"
           : (value === "公寓" || value === "大平层" || value === "老洋房" || value === "石库门") ? "high"
           : "mid";
         const priceWrapper = document.getElementById(`${prefix}-price-wrapper`);
-        if (priceWrapper) {
-          priceWrapper.classList.remove("hidden");
-          priceWrapper.dataset.priceTier = priceTierKey;
-        }
+        // 价格框什么时候出现由 _updateHouseSteps 决定（整页最后一个出现），这里只记下价位档次
+        if (priceWrapper) priceWrapper.dataset.priceTier = priceTierKey;
         const pBtn = document.getElementById(`${prefix}-price-dice-btn`);
         const pDisp = document.getElementById(`${prefix}-price-display`);
         const pInp = document.getElementById(`${prefix}-price`);
@@ -2622,12 +2873,13 @@ function rollHousingFieldDice(field, prefix) {
         text = disp(value);
         document.getElementById(`${prefix}-tenure`).value = value;
         const isBuying = value === "购买";
-        const ownerSec = document.getElementById(`${prefix}-ownership-section`);
-        const mortgageWrap = document.getElementById(
-          `${prefix}-mortgage-wrapper`,
-        );
-        if (ownerSec) ownerSec.classList.toggle("hidden", !isBuying);
-        if (mortgageWrap) mortgageWrap.classList.toggle("hidden", !isBuying);
+        // 租和买的价格区间不同：重摇租还是买时，之前摇的价格作废
+        const pInp = document.getElementById(`${prefix}-price`);
+        const pDisp = document.getElementById(`${prefix}-price-display`);
+        const pBtn = document.getElementById(`${prefix}-price-dice-btn`);
+        if (pInp) pInp.value = "";
+        if (pDisp) pDisp.textContent = "—";
+        if (pBtn) { pBtn.dataset.rolls = "0"; pBtn.disabled = false; pBtn.classList.remove("dice-exhausted"); pBtn.innerHTML = diceFaceImg(6, 4); }
         if (isBuying) {
           ["ownership", "mortgage"].forEach((f) => {
             const d = document.getElementById(`${prefix}-${f}-display`);
@@ -2670,10 +2922,9 @@ function rollHousingFieldDice(field, prefix) {
         value = HOUSING_TIERS.aptFloor[roll];
         text = value;
         document.getElementById(`${prefix}-apt-floor`).value = value;
-        // Show total-floors section and reset it
+        // 重摇楼层：一共几层要重新摇（它什么时候出现由 _updateHouseSteps 决定）
         const totalSec = document.getElementById(`${prefix}-apt-total-section`);
         if (totalSec) {
-          totalSec.classList.remove("hidden");
           document.getElementById(`${prefix}-apt-total`).value = "";
           document.getElementById(`${prefix}-apt-total-display`).textContent = "—";
           const tb = document.getElementById(`${prefix}-apt-total-dice-btn`);
@@ -2695,45 +2946,6 @@ function rollHousingFieldDice(field, prefix) {
   }, 70);
 }
 
-// Legacy dice kept for edit form
-function rollHousingDice(field, prefix, btnId, displayId) {
-  const btn = document.getElementById(btnId);
-  const display = document.getElementById(displayId);
-  if (!btn || !display) return;
-  btn.disabled = true;
-  let count = 0;
-  const interval = setInterval(() => {
-    display.innerHTML = diceFaceImg(Math.floor(Math.random() * 6) + 1, 4);
-    count++;
-    if (count >= 16) {
-      clearInterval(interval);
-      const result = Math.floor(Math.random() * 6) + 1;
-      display.innerHTML = diceFaceImg(result, 4);
-      if (result === 6) {
-        const p = prefix === "house" ? "house" : "edit-house";
-        if (field === "price") {
-          const prices = [
-            "1000w",
-            "1500w",
-            "2000w",
-            "3000w",
-            "5000w",
-            "8000w",
-            "1亿",
-            "3亿",
-          ];
-          document.getElementById(`${p}-price`).value =
-            prices[Math.floor(Math.random() * prices.length)];
-          setTimeout(() => {
-            display.innerHTML = diceFaceImg(6, 4) + " !!!";
-          }, 100);
-        }
-      }
-      btn.disabled = false;
-    }
-  }, 70);
-}
-
 function onOrientationChange(selectId, customInputId) {
   const sel = document.getElementById(selectId);
   const customInput = document.getElementById(customInputId);
@@ -2745,98 +2957,9 @@ function getCustomFieldValue(selectId, customInputId) {
   if (!sel) return "";
   if (sel.value === "自定义/Custom") {
     const custom = document.getElementById(customInputId);
-    return custom ? custom.value.trim() || sel.value : sel.value;
+    return custom ? _stripPunct(custom.value).trim() || sel.value : sel.value;
   }
   return sel.value;
-}
-
-function onHouseTypeChange() {
-  const el = document.getElementById("house-type");
-  if (!el) return;
-  const type = el.value;
-  const villaWrapper = document.getElementById("house-villa-wrapper");
-  if (villaWrapper) villaWrapper.classList.toggle("hidden", type !== "别墅");
-  const aptWrapper = document.getElementById("house-apt-floors-wrapper");
-  if (aptWrapper) aptWrapper.classList.toggle("hidden", type !== "公寓" && type !== "大平层");
-  const customInput = document.getElementById("house-type-custom");
-  if (customInput) customInput.classList.toggle("hidden", type !== "自定义");
-}
-
-function onHouseOwnershipChange() {
-  const ownership = document.getElementById("house-ownership");
-  if (!ownership) return;
-  const mortgageWrap = document.getElementById("house-mortgage-wrapper");
-  if (mortgageWrap)
-    mortgageWrap.classList.toggle("hidden", ownership.value === "租住中");
-}
-
-function onEditHouseTypeChange() {
-  const type = document.getElementById("edit-house-type").value;
-  document
-    .getElementById("edit-house-villa-wrapper")
-    .classList.toggle("hidden", type !== "别墅");
-  document
-    .getElementById("edit-house-type-custom")
-    .classList.toggle("hidden", type !== "自定义");
-}
-
-function onEditHouseOwnershipChange() {
-  const ownership = document.getElementById("edit-house-ownership").value;
-  document
-    .getElementById("edit-house-mortgage-wrapper")
-    .classList.toggle("hidden", ownership === "租住中");
-}
-
-function getEditHousingDescription() {
-  const city = getHousingCityValue("edit-house");
-  const cityDisplay = getCityDisplayName("edit-house");
-  const district = getHousingDistrictValue("edit-house");
-  const type = getHouseTypeValue("edit-house");
-  const villaFloors = document.getElementById("edit-house-villa-floors")?.value || "";
-  const garden = document.getElementById("edit-house-garden").value;
-  const area = document.getElementById("edit-house-area").value.trim();
-  const aptFloor = document.getElementById("edit-house-apt-floor")?.value.trim() || document.getElementById("edit-house-floor")?.value.trim() || "";
-  const aptTotal = document.getElementById("edit-house-apt-total")?.value.trim() || document.getElementById("edit-house-total-floors")?.value.trim() || "";
-  const price = document.getElementById("edit-house-price").value.trim();
-  const ownership = document.getElementById("edit-house-ownership").value;
-  const mortgageWrapper = document.getElementById(
-    "edit-house-mortgage-wrapper",
-  );
-  const mortgage = mortgageWrapper.classList.contains("hidden")
-    ? ""
-    : document.getElementById("edit-house-mortgage").value;
-
-  const parts = [];
-  if (cityDisplay || district)
-    parts.push([cityDisplay, disp(district)].filter(Boolean).join(" "));
-  if (area) parts.push(`${area}㎡`);
-  if (type)
-    parts.push(type === "别墅" ? `${disp(type)}(${villaFloors})` : disp(type));
-  if (garden === "有院子") parts.push("有院子 / Garden ✨");
-  if (aptFloor && aptTotal)
-    parts.push(`${aptFloor}/共${aptTotal} fl.`);
-  else if (aptFloor) parts.push(`${aptFloor}`);
-  if (price) parts.push(disp(price));
-  if (ownership) parts.push(disp(ownership));
-  if (mortgage) parts.push(disp(mortgage));
-  return parts.join(" ");
-}
-
-function getCityDisplayName(prefix) {
-  const provSel = document.getElementById(`${prefix}-province-select`);
-  if (provSel?.value === "custom") {
-    return document.getElementById(`${prefix}-city-custom`)?.value.trim() || "";
-  }
-  const sel = document.getElementById(`${prefix}-city-select`);
-  if (!sel?.value) return "";
-  const cityZh = sel.value;
-  const optText = sel.options[sel.selectedIndex]?.textContent.trim() || "";
-  const spaceIdx = optText.indexOf(" ");
-  if (spaceIdx > 0) {
-    const engPart = optText.slice(spaceIdx + 1);
-    return `${cityZh} / ${engPart}`;
-  }
-  return cityZh;
 }
 
 function getHousingDescription() {
@@ -2872,100 +2995,158 @@ function getHousingDescription() {
   return parts.join(" ");
 }
 
-function onBreedClassChange() {
-  const cls = document.getElementById("petBreedClass").value;
+// ── 种族选择（主物种 suffix=""，混血第二物种 suffix="2"）──
+// 每一级（大类 / 细类 / 子类 / 物种）最后都有「自定义」选项，选中后显示输入框。
+// 自定义的内容会在生成档案后加入种族库（/custom-breeds），之后所有人都能选到。
+const _BREED_CUSTOM = "__custom__";
+const _BREED_PH = {
+  sg: "选择细类 / Select subgroup...",
+  ssg: "选择子类 / Select sub-group...",
+  sp: "选择物种 / Select species...",
+};
+const _breedIds = (s) => ({
+  cls: `petBreedClass${s}`,
+  sg: `petBreedSubgroup${s}`,
+  ssg: `petBreedSubSubgroup${s}`,
+  sp: `petBreed${s}`,
+  sgWrap: `breedSubgroupWrapper${s}`,
+  ssgWrap: `breedSubSubgroupWrapper${s}`,
+  spWrap: `breedSpecificWrapper${s}`,
+});
 
-  document.getElementById("petBreedSubgroup").innerHTML =
-    '<option value="" disabled selected hidden>选择细类 / Select subgroup...</option>';
-  document.getElementById("petBreedSubSubgroup").innerHTML =
-    '<option value="" disabled selected hidden>选择子类 / Select sub-group...</option>';
-  document.getElementById("petBreed").innerHTML =
-    '<option value="" disabled selected hidden>选择物种 / Select species...</option>';
-  document.getElementById("breedSubSubgroupWrapper").classList.add("hidden");
-  document.getElementById("heightWrapper").classList.add("hidden");
-  document.getElementById("petHeight").innerHTML =
-    '<option value="" disabled selected hidden>选择身高 / Select height...</option>';
+// 读取某一级的值：选了自定义就读输入框（已去掉标点）
+function _breedSel(selectId) {
+  const v = document.getElementById(selectId)?.value || "";
+  if (v !== _BREED_CUSTOM) return v;
+  return _stripPunct(document.getElementById(`${selectId}-custom`)?.value).trim();
+}
 
-  if (breedSubgroups[cls]) {
-    const sgSelect = document.getElementById("petBreedSubgroup");
-    Object.keys(breedSubgroups[cls]).forEach((sg) => {
-      const opt = document.createElement("option");
-      opt.value = sg;
-      opt.textContent = sg;
-      sgSelect.appendChild(opt);
-    });
-    document.getElementById("breedSubgroupWrapper").classList.remove("hidden");
-    document.getElementById("breedSpecificWrapper").classList.add("hidden");
+function _syncBreedCustomInput(selectId) {
+  const input = document.getElementById(`${selectId}-custom`);
+  if (!input) return;
+  const isCustom = document.getElementById(selectId)?.value === _BREED_CUSTOM;
+  input.classList.toggle("hidden", !isCustom);
+  if (!isCustom) input.value = "";
+}
+
+function _resetBreedSelect(selectId, placeholder) {
+  document.getElementById(selectId).innerHTML =
+    `<option value="" disabled selected hidden>${placeholder}</option>`;
+  _syncBreedCustomInput(selectId);
+}
+
+function _addBreedOption(select, value) {
+  const opt = document.createElement("option");
+  opt.value = value;
+  opt.textContent = value;
+  select.appendChild(opt);
+}
+
+function _addBreedCustomOption(select) {
+  const opt = document.createElement("option");
+  opt.value = _BREED_CUSTOM;
+  opt.textContent = "自定义 Custom";
+  select.appendChild(opt);
+}
+
+function _show(id, visible) {
+  document.getElementById(id)?.classList.toggle("hidden", !visible);
+}
+
+// 显示物种下拉；forceCustom = 上一级是自定义，物种也只能自定义
+function _showBreedSpecies(s, list, forceCustom) {
+  const ids = _breedIds(s);
+  const select = document.getElementById(ids.sp);
+  _resetBreedSelect(ids.sp, _BREED_PH.sp);
+  if (!forceCustom) {
+    // 第二物种不能和主物种相同
+    const exclude = s === "2" ? document.getElementById("petBreed")?.value : null;
+    list.forEach((b) => { if (b !== exclude) _addBreedOption(select, b); });
+  }
+  _addBreedCustomOption(select);
+  if (forceCustom) select.value = _BREED_CUSTOM;
+  _syncBreedCustomInput(ids.sp);
+  _show(ids.spWrap, true);
+  if (s === "") updateHeightOptions();
+}
+
+function _onBreedClass(s) {
+  const ids = _breedIds(s);
+  const cls = document.getElementById(ids.cls).value;
+  _syncBreedCustomInput(ids.cls);
+  _resetBreedSelect(ids.sg, _BREED_PH.sg);
+  _resetBreedSelect(ids.ssg, _BREED_PH.ssg);
+  _resetBreedSelect(ids.sp, _BREED_PH.sp);
+  _show(ids.ssgWrap, false);
+  _show("heightWrapper", false);
+
+  if (cls === _BREED_CUSTOM) {
+    _show(ids.sgWrap, false);
+    _showBreedSpecies(s, [], true);
+  } else if (breedSubgroups[cls]) {
+    const sgSelect = document.getElementById(ids.sg);
+    Object.keys(breedSubgroups[cls]).forEach((sg) => _addBreedOption(sgSelect, sg));
+    _addBreedCustomOption(sgSelect);
+    _show(ids.sgWrap, true);
+    _show(ids.spWrap, false);
   } else {
-    document.getElementById("breedSubgroupWrapper").classList.add("hidden");
-    const select = document.getElementById("petBreed");
-    (breedData[cls] || []).forEach((b) => {
-      const opt = document.createElement("option");
-      opt.value = b;
-      opt.textContent = b;
-      select.appendChild(opt);
-    });
-    document.getElementById("breedSpecificWrapper").classList.remove("hidden");
-    updateHeightOptions();
+    _show(ids.sgWrap, false);
+    _showBreedSpecies(s, breedData[cls] || []);
   }
 }
 
-function onBreedSubgroupChange() {
-  const cls = document.getElementById("petBreedClass").value;
-  const sg = document.getElementById("petBreedSubgroup").value;
-  const val = (breedSubgroups[cls] || {})[sg];
+function _onBreedSubgroup(s) {
+  const ids = _breedIds(s);
+  const cls = document.getElementById(ids.cls).value;
+  const sg = document.getElementById(ids.sg).value;
+  _syncBreedCustomInput(ids.sg);
+  _resetBreedSelect(ids.ssg, _BREED_PH.ssg);
+  _resetBreedSelect(ids.sp, _BREED_PH.sp);
+  _show("heightWrapper", false);
 
-  document.getElementById("petBreedSubSubgroup").innerHTML =
-    '<option value="" disabled selected hidden>选择子类 / Select sub-group...</option>';
-  document.getElementById("petBreed").innerHTML =
-    '<option value="" disabled selected hidden>选择物种 / Select species...</option>';
-  document.getElementById("heightWrapper").classList.add("hidden");
-
-  if (val && !Array.isArray(val)) {
-    // Nested: show sub-subgroup picker
-    const ssgSelect = document.getElementById("petBreedSubSubgroup");
-    Object.keys(val).forEach((ssg) => {
-      const opt = document.createElement("option");
-      opt.value = ssg;
-      opt.textContent = ssg;
-      ssgSelect.appendChild(opt);
-    });
-    document
-      .getElementById("breedSubSubgroupWrapper")
-      .classList.remove("hidden");
-    document.getElementById("breedSpecificWrapper").classList.add("hidden");
+  const val = sg === _BREED_CUSTOM ? null : (breedSubgroups[cls] || {})[sg];
+  if (sg === _BREED_CUSTOM) {
+    _show(ids.ssgWrap, false);
+    _showBreedSpecies(s, [], true);
+  } else if (val && !Array.isArray(val)) {
+    // 还有一层子类
+    const ssgSelect = document.getElementById(ids.ssg);
+    Object.keys(val).forEach((ssg) => _addBreedOption(ssgSelect, ssg));
+    _addBreedCustomOption(ssgSelect);
+    _show(ids.ssgWrap, true);
+    _show(ids.spWrap, false);
   } else {
-    // Flat: show species directly
-    document.getElementById("breedSubSubgroupWrapper").classList.add("hidden");
-    const select = document.getElementById("petBreed");
-    (val || []).forEach((b) => {
-      const opt = document.createElement("option");
-      opt.value = b;
-      opt.textContent = b;
-      select.appendChild(opt);
-    });
-    document.getElementById("breedSpecificWrapper").classList.remove("hidden");
-    updateHeightOptions();
+    _show(ids.ssgWrap, false);
+    _showBreedSpecies(s, val || []);
   }
 }
 
-function onBreedSubSubgroupChange() {
-  const cls = document.getElementById("petBreedClass").value;
-  const sg = document.getElementById("petBreedSubgroup").value;
-  const ssg = document.getElementById("petBreedSubSubgroup").value;
-  const select = document.getElementById("petBreed");
-  select.innerHTML =
-    '<option value="" disabled selected hidden>选择物种 / Select species...</option>';
-  (((breedSubgroups[cls] || {})[sg] || {})[ssg] || []).forEach((b) => {
-    const opt = document.createElement("option");
-    opt.value = b;
-    opt.textContent = b;
-    select.appendChild(opt);
-  });
-  document.getElementById("breedSpecificWrapper").classList.remove("hidden");
-  document.getElementById("heightWrapper").classList.add("hidden");
-  updateHeightOptions();
+function _onBreedSubSubgroup(s) {
+  const ids = _breedIds(s);
+  const cls = document.getElementById(ids.cls).value;
+  const sg = document.getElementById(ids.sg).value;
+  const ssg = document.getElementById(ids.ssg).value;
+  _syncBreedCustomInput(ids.ssg);
+  _show("heightWrapper", false);
+  if (ssg === _BREED_CUSTOM) _showBreedSpecies(s, [], true);
+  else _showBreedSpecies(s, ((breedSubgroups[cls] || {})[sg] || {})[ssg] || []);
 }
+
+function _onBreedSpecies(s) {
+  _syncBreedCustomInput(_breedIds(s).sp);
+  if (s === "") updateHeightOptions();
+  else updateHeightOptions2();
+}
+
+// HTML 里 onchange 用的名字
+function onBreedClassChange() { _onBreedClass(""); }
+function onBreedSubgroupChange() { _onBreedSubgroup(""); }
+function onBreedSubSubgroupChange() { _onBreedSubSubgroup(""); }
+function onBreedSpeciesChange() { _onBreedSpecies(""); }
+function onBreedClass2Change() { _onBreedClass("2"); }
+function onBreedSubgroup2Change() { _onBreedSubgroup("2"); }
+function onBreedSubSubgroup2Change() { _onBreedSubSubgroup("2"); }
+function onBreedSpecies2Change() { _onBreedSpecies("2"); }
 
 function onMixedBreedChange() {
   const checked = document.getElementById("isMixed")?.checked;
@@ -2979,111 +3160,97 @@ function onMixedBreedChange() {
   }
 }
 
-function _breed2AddOptions(select, list) {
-  const exclude = document.getElementById("petBreed")?.value || "";
-  list.forEach((b) => {
-    if (b === exclude) return;
-    const opt = document.createElement("option");
-    opt.value = b;
-    opt.textContent = b;
-    select.appendChild(opt);
-  });
-}
-
-function onBreedClass2Change() {
-  const cls = document.getElementById("petBreedClass2").value;
-  document.getElementById("petBreedSubgroup2").innerHTML =
-    '<option value="" disabled selected hidden>选择细类 / Select subgroup...</option>';
-  document.getElementById("petBreed2").innerHTML =
-    '<option value="" disabled selected hidden>选择物种 / Select species...</option>';
-  document.getElementById("breedSubSubgroupWrapper2").classList.add("hidden");
-  document.getElementById("heightWrapper").classList.add("hidden");
-
-  if (breedSubgroups[cls]) {
-    const sgSelect = document.getElementById("petBreedSubgroup2");
-    Object.keys(breedSubgroups[cls]).forEach((sg) => {
-      const opt = document.createElement("option");
-      opt.value = sg;
-      opt.textContent = sg;
-      sgSelect.appendChild(opt);
-    });
-    document.getElementById("breedSubgroupWrapper2").classList.remove("hidden");
-    document.getElementById("breedSpecificWrapper2").classList.add("hidden");
+// ── 种族库：大家自定义过的种族 ──
+// 页面加载时取回并合并进 breedSubgroups / breedData，下拉里就能直接选到
+function _mergeCustomBreed(e) {
+  if (!e || !e.cls || !e.species) return;
+  const push = (list, v) => { if (!list.includes(v)) list.push(v); };
+  if (breedSubgroups[e.cls]) {
+    if (!e.sg) return;
+    const group = breedSubgroups[e.cls];
+    if (e.ssg) {
+      if (!group[e.sg]) group[e.sg] = {};
+      if (Array.isArray(group[e.sg])) push(group[e.sg], e.species);
+      else push((group[e.sg][e.ssg] = group[e.sg][e.ssg] || []), e.species);
+    } else {
+      if (!group[e.sg]) group[e.sg] = [];
+      if (Array.isArray(group[e.sg])) push(group[e.sg], e.species);
+      else push((group[e.sg]["自定义 / Custom"] = group[e.sg]["自定义 / Custom"] || []), e.species);
+    }
   } else {
-    document.getElementById("breedSubgroupWrapper2").classList.add("hidden");
-    _breed2AddOptions(
-      document.getElementById("petBreed2"),
-      breedData[cls] || [],
-    );
-    document.getElementById("breedSpecificWrapper2").classList.remove("hidden");
+    if (!breedData[e.cls]) {
+      breedData[e.cls] = [];
+      // 新的大类：加到两个大类下拉里（放在「自定义」前面）
+      ["petBreedClass", "petBreedClass2"].forEach((id) => {
+        const sel = document.getElementById(id);
+        if (!sel) return;
+        const opt = document.createElement("option");
+        opt.value = e.cls;
+        opt.textContent = e.cls;
+        sel.insertBefore(opt, sel.querySelector(`option[value="${_BREED_CUSTOM}"]`));
+      });
+    }
+    push(breedData[e.cls], e.species);
   }
 }
 
-function onBreedSubgroup2Change() {
-  const cls = document.getElementById("petBreedClass2").value;
-  const sg = document.getElementById("petBreedSubgroup2").value;
-  const val = (breedSubgroups[cls] || {})[sg];
+api("/custom-breeds")
+  .then((r) => r.json())
+  .then((list) => (Array.isArray(list) ? list : []).forEach(_mergeCustomBreed))
+  .catch(() => {});
 
-  document.getElementById("petBreedSubSubgroup2").innerHTML =
-    '<option value="" disabled selected hidden>选择子类 / Select sub-group...</option>';
-  document.getElementById("petBreed2").innerHTML =
-    '<option value="" disabled selected hidden>选择物种 / Select species...</option>';
-  document.getElementById("heightWrapper").classList.add("hidden");
-
-  if (val && !Array.isArray(val)) {
-    const ssgSelect = document.getElementById("petBreedSubSubgroup2");
-    Object.keys(val).forEach((ssg) => {
-      const opt = document.createElement("option");
-      opt.value = ssg;
-      opt.textContent = ssg;
-      ssgSelect.appendChild(opt);
-    });
-    document
-      .getElementById("breedSubSubgroupWrapper2")
-      .classList.remove("hidden");
-    document.getElementById("breedSpecificWrapper2").classList.add("hidden");
-  } else {
-    document.getElementById("breedSubSubgroupWrapper2").classList.add("hidden");
-    _breed2AddOptions(document.getElementById("petBreed2"), val || []);
-    document.getElementById("breedSpecificWrapper2").classList.remove("hidden");
-  }
-}
-
-function onBreedSubSubgroup2Change() {
-  const cls = document.getElementById("petBreedClass2").value;
-  const sg = document.getElementById("petBreedSubgroup2").value;
-  const ssg = document.getElementById("petBreedSubSubgroup2").value;
-  const select = document.getElementById("petBreed2");
-  select.innerHTML =
-    '<option value="" disabled selected hidden>选择物种 / Select species...</option>';
-  _breed2AddOptions(select, ((breedSubgroups[cls] || {})[sg] || {})[ssg] || []);
-  document.getElementById("breedSpecificWrapper2").classList.remove("hidden");
-  document.getElementById("heightWrapper").classList.add("hidden");
+// 生成档案时，把用到的自定义种族存进种族库
+function _saveCustomBreed(s) {
+  const ids = _breedIds(s);
+  const isCustom = (id) => document.getElementById(id)?.value === _BREED_CUSTOM;
+  const custom = {
+    cls: isCustom(ids.cls),
+    sg: isCustom(ids.sg),
+    ssg: isCustom(ids.ssg),
+    species: isCustom(ids.sp),
+  };
+  if (!custom.cls && !custom.sg && !custom.ssg && !custom.species) return;
+  const visible = (id) => !document.getElementById(id)?.classList.contains("hidden");
+  const entry = {
+    cls: _breedSel(ids.cls),
+    sg: visible(ids.sgWrap) ? _breedSel(ids.sg) : "",
+    ssg: visible(ids.ssgWrap) ? _breedSel(ids.ssg) : "",
+    species: _breedSel(ids.sp),
+    custom,
+  };
+  if (!entry.cls || !entry.species) return;
+  api("/custom-breeds", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(entry),
+  })
+    .then(() => _mergeCustomBreed(entry))
+    .catch(() => {});
 }
 
 // Create Profile & Swipe Function
 let profiles = [];
 let currentIndex = 0;
 function createCard() {
-  const username = document.getElementById("username").value;
-  const password = document.getElementById("password").value;
+  const username = document.getElementById("username").value.trim();
+  const password = document.getElementById("password").value.trim();
   const name = document.getElementById("petName").value;
-  const breedClass = document.getElementById("petBreedClass").value;
-  const breedSpecific = document.getElementById("petBreed").value;
+  const breedClass = _breedSel("petBreedClass");
+  const breedSpecific = _breedSel("petBreed");
   const breed =
     breedClass && breedSpecific
       ? `${breedClass} · ${breedSpecific}`
       : breedSpecific || breedClass;
   const isMixed = document.getElementById("isMixed")?.checked || false;
-  const breedClass2 = document.getElementById("petBreedClass2")?.value || "";
-  const breedSpecific2 = document.getElementById("petBreed2")?.value || "";
+  const breedClass2 = _breedSel("petBreedClass2");
+  const breedSpecific2 = _breedSel("petBreed2");
   const breed2 = isMixed
     ? breedClass2 && breedSpecific2
       ? `${breedClass2} · ${breedSpecific2}`
       : breedSpecific2 || breedClass2
     : "";
   const height = document.getElementById("petHeight").value;
-  const gender = document.getElementById("petGender").value;
+  const gender = getCustomFieldValue("petGender", "gender-custom");
   const orientation = getCustomFieldValue(
     "petOrientation",
     "orientation-custom",
@@ -3103,55 +3270,49 @@ function createCard() {
   const occupation = document.getElementById("petOccupation").value;
   const income = document.getElementById("petIncome").value;
   const finalScore = getTotalProfileScore();
+  // 只存现在显示着的项（重摇后被隐藏的旧答案不存）
   const houseData = {
     city: getHousingCityValue("house"),
     district: getHousingDistrictValue("house"),
     type: getHouseTypeValue("house"),
-    villaFloors: document.getElementById("house-villa-floors").value,
-    garden: document.getElementById("house-garden").value,
-    area: document.getElementById("house-area").value.trim(),
-    villaFloors: document.getElementById("house-villa-floors").value,
-    aptFloor: document.getElementById("house-apt-floor")?.value.trim() || "",
-    aptTotal: document.getElementById("house-apt-total")?.value.trim() || "",
-    price: document.getElementById("house-price").value.trim(),
-    ownership: document.getElementById("house-ownership").value,
-    mortgage: document
-      .getElementById("house-mortgage-wrapper")
-      .classList.contains("hidden")
-      ? ""
-      : document.getElementById("house-mortgage").value,
+    villaFloors: _shownVal("house-villa-floors"),
+    garden: _shownVal("house-garden"),
+    area: _shownVal("house-area"),
+    aptFloor: _shownVal("house-apt-floor"),
+    aptTotal: _shownVal("house-apt-total"),
+    tenure: _shownVal("house-tenure"),
+    ownership: _shownVal("house-ownership"),
+    mortgage: _shownVal("house-mortgage"),
+    price: _shownVal("house-price"),
   };
 
   const vehicleTypes = (document.getElementById("vehicle-types-hidden")?.value || "").split(",").filter(Boolean);
   const vehicleData = {
     types: vehicleTypes,
-    model: document.getElementById("vehicle-model")?.value || "",
-    count: document.getElementById("vehicle-count")?.value || "",
-    price: document.getElementById("vehicle-price")?.value || "",
+    model: _shownVal("vehicle-model"),
+    count: _shownVal("vehicle-count"),
+    price: _shownVal("vehicle-price"),
   };
 
   const parentsData = {
-    status: document.getElementById("parents-status")?.value || "",
-    fatherOrigin: getCityDisplayName("parents-father"),
-    motherOrigin: getCityDisplayName("parents-mother"),
-    siblingCount: document.getElementById("parents-siblingCount")?.value || "",
-    siblingWealth: document.getElementById("parents-siblingWealth")?.value || "",
+    status: _shownVal("parents-status"),
+    // 已故的一方不显示籍贯，也不存
+    fatherOrigin: document.getElementById("parents-father-wrapper")?.classList.contains("hidden") ? "" : getCityDisplayName("parents-father"),
+    motherOrigin: document.getElementById("parents-mother-wrapper")?.classList.contains("hidden") ? "" : getCityDisplayName("parents-mother"),
+    relationship: _shownVal("parents-relationship"),
+    siblingCount: _shownVal("parents-siblingCount"),
+    siblingWealth: _shownVal("parents-siblingWealth"),
   };
 
-  const g = (id) => document.getElementById(id)?.value || "";
+  const g = _shownVal;
   const relationshipData = {
     status: g("petSterilized"),
+    ships: g("rel-ships"),
     pastRelCount: g("rel-pastCount"),
     exContact: g("rel-exContact"),
     stillLoveEx: g("rel-stillLoveEx"),
     whiteMoonlight: g("rel-whiteMoon"),
     kids: g("rel-kids"),
-    currentPartner: g("rel-partner"),
-    partnerCount: g("rel-partnerCount"),
-    ambiguous: g("rel-ambiguous"),
-    foreignPartner: g("rel-foreignPartner"),
-    otherCityPartner: g("rel-otherCity"),
-    secretPartner: g("rel-secret"),
     crush: g("rel-crush"),
     datingPurpose: g("rel-purpose"),
     relationshipGoal: g("rel-goal"),
@@ -3183,125 +3344,50 @@ function createCard() {
     occupation: occupation,
     income: income,
     score: finalScore,
-    grid: grid,
+    // 画布没准备好（比如 p5 没加载出来）就存一张空白的，不存空数组
+    grid: _isValidGrid(grid) ? grid : _blankGrid(),
     gridText: currentText,
   };
 
+  // 先在本地记下新用户，看完档案卡可直接进入教学，不用回去登录
+  currentUser = profile;
+
   // send the profile data to the server
-  fetch("/profiles", {
+  _pendingProfileSave = api("/profiles", {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
     },
     body: JSON.stringify(profile),
   })
-    .then((res) => res.json())
-    .then((data) => {
-      currentUser = data;
-      console.log("Saved profile:", data);
+    .then((res) => res.json().then((data) => ({ ok: res.ok, data })))
+    .then(({ ok, data }) => {
+      if (!ok) {
+        // 用户名已被别人占用（密码不同）
+        currentUser = null;
+        showAlert("这个用户名已被占用，请换一个重新注册！\nThis username is taken, please sign up with another one.");
+        goTo("login");
+        return;
+      }
+      _acceptLogin(data);
+      // 拿到令牌后，把这次用到的自定义内容（种族、爱好、性别、性取向、城市）存进系统，之后所有人都能选到
+      _saveCustomBreed("");
+      if (isMixed) _saveCustomBreed("2");
+      _saveCustomHobbies();
+      _saveCustomOptions();
       startMessagePolling();
+    })
+    .catch((err) => console.error("Save profile failed:", err))
+    .finally(() => {
+      _pendingProfileSave = null;
     });
 
-  // render the card exactly like the swipe view
-  const _sd = new Date();
-  const stampDate = `${_sd.getFullYear()}.${String(_sd.getMonth()+1).padStart(2,"0")}.${String(_sd.getDate()).padStart(2,"0")}`;
-  const stampColorClass = finalScore < 60 ? "stamp-red" : "";
-  const avatarSrc = renderGridAsAvatar(grid, currentText);
-  const horoscope = getHoroscope(document.getElementById("birthDisplay")?.value);
-  const vehicleStr = fmt([
-    vehicleData.types?.length ? vehicleData.types.join(" ") : null,
-    vehicleData.model || null,
-    vehicleData.count ? disp(vehicleData.count) : null,
-    vehicleData.price ? disp(vehicleData.price) : null,
-  ].filter(Boolean).join(" ") || "—");
-  const siblingStr = (() => {
-    const cnt = parentsData.siblingCount;
-    if (!cnt || cnt === "独生/Only Child") return cnt ? disp(cnt) : null;
-    const wealth = parentsData.siblingWealth ? disp(parentsData.siblingWealth) : null;
-    return [disp(cnt), wealth].filter(Boolean).join(" ");
-  })();
-  const parentsStr = fmt([
-    parentsData.status ? disp(parentsData.status) : null,
-    parentsData.fatherOrigin ? `父 ${parentsData.fatherOrigin}` : null,
-    parentsData.motherOrigin ? `母 ${parentsData.motherOrigin}` : null,
-    siblingStr,
-  ].filter(Boolean).join(" · ") || "—");
-  const rel = relationshipData;
-
-  document.getElementById("petCard").innerHTML = `
-<div class="profile-score-stamp ${stampColorClass}">
-  <span class="stamp-date">${stampDate}</span>
-  <span class="stamp-num">${finalScore}</span>
-  <span class="stamp-lines"><span></span><span></span></span>
-</div>
-<div class="avatar-box"><img src="${avatarSrc}" class="avatar"></div>
-<div class="section">
-  <span class="label">名字 <small>Name</small></span>
-  <span class="value big">${fmt(name || "无名兽人 Unnamed Anthro")}</span>
-</div>
-<div class="section">
-  <span class="label">物种 <small>Species</small></span>
-  <span class="value territory">${fmt((() => { const sp = (v) => { if(!v) return ""; const p=v.split(" · "); return p.length>1?p.slice(1).join(" · "):v; }; return sp(breed) + (isMixed && breed2 ? ` × ${sp(breed2)}（混血 Mixed）` : ""); })())}</span>
-</div>
-<div class="grid-3">
-  <div class="cell"><span class="label">性别 <small>Gender</small></span><span class="value">${fmt(gender || "—")}</span></div>
-  <div class="cell"><span class="label">年龄 <small>Age</small></span><span class="value">${fmt(age || "—")}</span></div>
-  <div class="cell"><span class="label">身高 <small>Height</small></span><span class="value">${fmt(height || "—")}</span></div>
-</div>
-<div class="grid-2">
-  <div class="cell"><span class="label">性取向 <small>Orientation</small></span><span class="value">${fmt(orientation || "—")}</span></div>
-  <div class="cell"><span class="label">婚恋 <small>Status</small></span><span class="value">${fmt(sterilized || "—")}</span></div>
-</div>
-<div class="section">
-  <span class="label">领地 <small>Territory</small></span>
-  <span class="value territory">${fmt(hukou || "—")}</span>
-</div>
-<div class="grid-2">
-  <div class="cell"><span class="label">目的 <small>Here For</small></span><span class="value">${fmt(rel.datingPurpose || "—")}</span></div>
-  <div class="cell"><span class="label">期望关系 <small>Looking For</small></span><span class="value">${fmt(rel.relationshipGoal || "—")}</span></div>
-</div>
-<div class="grid-3">
-  <div class="cell"><span class="label">目前伴侣 <small>Partner</small></span><span class="value">${fmt(rel.currentPartner || "—")}</span></div>
-  <div class="cell"><span class="label">伴侣数量 <small># Partners</small></span><span class="value">${fmt(rel.partnerCount || "—")}</span></div>
-  <div class="cell"><span class="label">子女 <small>Kids</small></span><span class="value">${fmt(rel.kids || "—")}</span></div>
-</div>
-<div class="grid-3">
-  <div class="cell"><span class="label">暗恋 <small>Crush</small></span><span class="value">${fmt(rel.crush || "—")}</span></div>
-  <div class="cell"><span class="label">暧昧 <small>Ambiguous</small></span><span class="value">${fmt(rel.ambiguous || "—")}</span></div>
-  <div class="cell"><span class="label">秘密伴侣 <small>Secret</small></span><span class="value">${fmt(rel.secretPartner || "—")}</span></div>
-</div>
-<div class="grid-3">
-  <div class="cell"><span class="label">境外伴侣 <small>Foreign</small></span><span class="value">${fmt(rel.foreignPartner || "—")}</span></div>
-  <div class="cell"><span class="label">异地伴侣 <small>Long Dist</small></span><span class="value">${fmt(rel.otherCityPartner || "—")}</span></div>
-  <div class="cell"><span class="label">白月光 <small>Moonlight</small></span><span class="value">${fmt(rel.whiteMoonlight || "—")}</span></div>
-</div>
-<div class="grid-3">
-  <div class="cell"><span class="label">谈过 <small>Past Rels</small></span><span class="value">${fmt(rel.pastRelCount || "—")}</span></div>
-  <div class="cell"><span class="label">前任联系 <small>Ex Contact</small></span><span class="value">${fmt(rel.exContact || "—")}</span></div>
-  <div class="cell"><span class="label">还爱前任 <small>Still Love Ex</small></span><span class="value">${fmt(rel.stillLoveEx || "—")}</span></div>
-</div>
-<div class="grid-2">
-  <div class="cell"><span class="label">MBTI</span><span class="value big">${mbti || "—"}</span></div>
-  <div class="cell"><span class="label">星座 <small>Horoscope</small></span><span class="value">${fmt(horoscope || "—")}</span></div>
-</div>
-<div class="grid-3">
-  <div class="cell"><span class="label">学历 <small>Education</small></span><span class="value">${fmt(edu || "—")}</span></div>
-  <div class="cell"><span class="label">职业 <small>Job</small></span><span class="value">${fmt(occupation || "—")}</span></div>
-  <div class="cell"><span class="label">月收入 <small>Income</small></span><span class="value">${fmt(income || "—")}</span></div>
-</div>
-<div class="section">
-  <span class="label">兴趣爱好 <small>Hobbies</small></span>
-  <span class="value">${fmt(hobby || "—")}</span>
-</div>
-<div class="section">
-  <span class="label">车 <small>Vehicles</small></span>
-  <span class="value">${vehicleStr}</span>
-</div>
-<div class="section">
-  <span class="label">家庭状况 <small>Family</small></span>
-  <span class="value">${parentsStr}</span>
-</div>
-`;
+  // 档案卡和浏览页、我的档案共用 renderCardHTML，显示格式保持一致
+  // （date 只用于印章日期显示；服务器保存时会写入自己的时间）
+  document.getElementById("petCard").innerHTML = renderCardHTML({
+    ...profile,
+    date: new Date().toISOString(),
+  });
 
   document.getElementById("score-running-badge").style.display = "none";
   animateSettlement(finalScore);
@@ -3326,15 +3412,22 @@ function matchesOrientation(viewer, target) {
   return true;
 }
 
-function createSwipeCard() {
+let _pendingProfileSave = null;
+
+function createSwipeCard({ skipOnboarding = false } = {}) {
+  // 新建档案还在保存中 → 等保存完成再进入（拿到服务器返回的完整用户数据）
+  if (_pendingProfileSave) {
+    _pendingProfileSave.then(() => createSwipeCard({ skipOnboarding }));
+    return;
+  }
   if (!currentUser) {
-    alert("请先登录 / Please login first");
+    showAlert("请先登录 / Please login first");
     goTo("login");
     return;
   }
   checkNotifications();
   //Get profiles from profiles.json
-  fetch("/profiles")
+  api("/profiles")
     // transform the response into JSON to get the data
     .then((res) => res.json())
     // store data back in the profiles array
@@ -3356,16 +3449,34 @@ function createSwipeCard() {
       currentIndex = 0;
       showProfile();
       goTo("swipe-page");
-      startOnboarding();
+      if (skipOnboarding) {
+        // 老用户：不显示教学，直接启动 obFinish 里的后续流程
+        document.getElementById("onboard-overlay")?.classList.add("hidden");
+        startSwipeInterrupts();
+        startGenderedNotifications();
+        if (!popupShowing) showNextPopup();
+      } else {
+        startOnboarding();
+      }
       _startProfileDataRefresh();
     });
+}
+
+// 只取一个人的档案；取不到返回 null
+function fetchProfile(username) {
+  return api(`/profiles/${encodeURIComponent(username)}`)
+    .then((r) => (r.ok ? r.json() : null))
+    .catch(() => null);
 }
 
 let _profileRefreshTimer = null;
 function _startProfileDataRefresh() {
   if (_profileRefreshTimer) clearInterval(_profileRefreshTimer);
   _profileRefreshTimer = setInterval(() => {
-    fetch("/profiles")
+    // app 在后台时不请求
+    if (document.hidden) return;
+    // 只要 like / skip / 印象，不下载整份档案（画、文字等）
+    api("/profiles/activity")
       .then(r => r.json())
       .then(fresh => {
         let currentChanged = false;
@@ -3403,564 +3514,12 @@ function _startProfileDataRefresh() {
 }
 
 // ── Hobby tags ────────────────────────────────────────────────
-// tier: 0=堕落(+3) 1=兽人特色/有意思(+2) 2=运动(+2) 3=科技/科学(+1) 4=健康养生(0) 5=艺术/文学/音乐/知识(-1,装)
-// badges are never shown to users — scoring is silent
-const HOBBY_CATEGORIES = [
-  {
-    zh: "兽人特色",
-    en: "Anthro Life",
-    tier: 1,
-    tags: [
-      { zh: "狩猎", en: "Hunting" },
-      { zh: "筑巢", en: "Nesting" },
-      { zh: "觅食", en: "Foraging" },
-      { zh: "飞翔", en: "Flying" },
-      { zh: "冬眠", en: "Hibernating" },
-      { zh: "标记领地", en: "Territory Marking" },
-      { zh: "奔跑", en: "Running" },
-      { zh: "攀爬", en: "Climbing" },
-      { zh: "格斗", en: "Fighting" },
-      { zh: "潜水", en: "Diving" },
-      { zh: "晒毛", en: "Sunbathing Fur" },
-      { zh: "理毛", en: "Grooming" },
-      { zh: "嗅探", en: "Sniffing" },
-      { zh: "夜行", en: "Night Roaming" },
-    ],
-  },
-  {
-    zh: "堕落放松",
-    en: "Guilty Pleasures",
-    tier: 0,
-    tags: [
-      { zh: "刷短视频", en: "Short Videos" },
-      { zh: "刷微博", en: "Weibo Scrolling" },
-      { zh: "刷剧", en: "Binge Watching" },
-      { zh: "看综艺", en: "Variety Shows" },
-      { zh: "躺着玩手机", en: "Phone in Bed" },
-      { zh: "瘫在沙发吃零食", en: "Couch Snacking" },
-      { zh: "熬夜追小说", en: "Late Night Novels" },
-      { zh: "看甜宠剧", en: "Romcoms" },
-      { zh: "磕CP", en: "Shipping" },
-      { zh: "刷朋友圈", en: "Feed Scrolling" },
-      { zh: "窥探前任动态", en: "Stalking Exes" },
-      { zh: "漫无目的网购", en: "Mindless Shopping" },
-      { zh: "看土味视频", en: "Cringey Videos" },
-      { zh: "玩消消乐", en: "Match-3 Games" },
-      { zh: "吃垃圾食品", en: "Junk Food" },
-      { zh: "喝高糖饮料", en: "Sugary Drinks" },
-      { zh: "赖床", en: "Staying in Bed" },
-      { zh: "工作日请病假", en: "Faking Sick Days" },
-      { zh: "拖延事项", en: "Procrastinating" },
-      { zh: "逃避社交", en: "Avoiding People" },
-      { zh: "沉迷八卦", en: "Gossip" },
-      { zh: "看塌房新闻", en: "Drama News" },
-      { zh: "给朋友发吐槽", en: "Venting" },
-      { zh: "反复刷消息", en: "Refreshing Messages" },
-      { zh: "把脏衣服堆成山", en: "Laundry Mountain" },
-      { zh: "点外卖", en: "Food Delivery" },
-      { zh: "把房间弄乱不管", en: "Ignoring Mess" },
-      { zh: "看天气不出门", en: "Weather Excuses" },
-      { zh: "研究如何更懒", en: "Optimizing Laziness" },
-      { zh: "收藏躺平语录", en: "Slack Quotes" },
-      { zh: "摆烂", en: "Letting Go" },
-      { zh: "看吃播", en: "Food Streams" },
-      { zh: "听洗脑神曲循环", en: "Earworm Loops" },
-      { zh: "玩网页小游戏", en: "Browser Games" },
-      { zh: "看老剧重温童年", en: "Childhood Shows" },
-      { zh: "发呆看天花板", en: "Staring at Ceiling" },
-      { zh: "数羊睡不着", en: "Counting Sheep" },
-      { zh: "泡脚看剧", en: "Foot Soak & TV" },
-      { zh: "晒太阳放空", en: "Sunbathing" },
-      { zh: "逛超市试吃", en: "Supermarket Sampling" },
-      { zh: "喂鸽子", en: "Feeding Pigeons" },
-      { zh: "收集搞笑段子", en: "Meme Collecting" },
-      { zh: "整理手机越整越乱", en: "Disorganizing Phone" },
-    ],
-  },
-  {
-    zh: "艺术与手工",
-    en: "Arts & Crafts",
-    tier: 5,
-    tags: [
-      { zh: "素描", en: "Sketching" },
-      { zh: "速写", en: "Gesture Drawing" },
-      { zh: "水彩画", en: "Watercolor" },
-      { zh: "油画", en: "Oil Painting" },
-      { zh: "丙烯画", en: "Acrylic Painting" },
-      { zh: "版画", en: "Printmaking" },
-      { zh: "数字绘画", en: "Digital Art" },
-      { zh: "插画", en: "Illustration" },
-      { zh: "漫画", en: "Comics" },
-      { zh: "动画原画", en: "Animation" },
-      { zh: "硬笔书法", en: "Pen Calligraphy" },
-      { zh: "毛笔书法", en: "Brush Calligraphy" },
-      { zh: "篆刻", en: "Seal Carving" },
-      { zh: "木雕", en: "Wood Carving" },
-      { zh: "石雕", en: "Stone Carving" },
-      { zh: "玉雕", en: "Jade Carving" },
-      { zh: "泥塑", en: "Clay Sculpting" },
-      { zh: "陶艺", en: "Ceramics" },
-      { zh: "拉坯", en: "Pottery Wheel" },
-      { zh: "陶瓷彩绘", en: "Ceramic Painting" },
-      { zh: "琉璃制作", en: "Glass Art" },
-      { zh: "玻璃吹制", en: "Glass Blowing" },
-      { zh: "马赛克镶嵌", en: "Mosaic" },
-      { zh: "金工首饰", en: "Metalwork Jewelry" },
-      { zh: "银饰制作", en: "Silver Jewelry" },
-      { zh: "棒针编织", en: "Knitting" },
-      { zh: "钩针编织", en: "Crochet" },
-      { zh: "十字绣", en: "Cross Stitch" },
-      { zh: "缝纫", en: "Sewing" },
-      { zh: "拼布", en: "Quilting" },
-      { zh: "服装设计", en: "Fashion Design" },
-      { zh: "首饰制作", en: "Jewelry Making" },
-      { zh: "皮具制作", en: "Leatherwork" },
-      { zh: "木工", en: "Woodworking" },
-      { zh: "家具制作", en: "Furniture Making" },
-      { zh: "建筑模型", en: "Architecture Models" },
-      { zh: "剪纸", en: "Paper Cutting" },
-      { zh: "折纸", en: "Origami" },
-      { zh: "纸雕", en: "Paper Sculpting" },
-      { zh: "串珠", en: "Beading" },
-      { zh: "蜡烛制作", en: "Candle Making" },
-      { zh: "香薰制作", en: "Aromatherapy Crafts" },
-      { zh: "手工皂", en: "Soap Making" },
-      { zh: "花艺", en: "Floral Art" },
-      { zh: "插花", en: "Ikebana" },
-      { zh: "苔藓微景观", en: "Moss Terrariums" },
-      { zh: "植物标本", en: "Plant Specimens" },
-      { zh: "昆虫标本", en: "Insect Specimens" },
-      { zh: "布艺玩偶", en: "Fabric Dolls" },
-      { zh: "旅行手账", en: "Travel Journals" },
-      { zh: "印章雕刻", en: "Stamp Carving" },
-      { zh: "自然材料拼贴画", en: "Nature Collage" },
-      { zh: "戏剧面具彩绘", en: "Mask Painting" },
-      { zh: "复古首饰修复", en: "Vintage Jewelry Repair" },
-    ],
-  },
-  {
-    zh: "音乐与表演",
-    en: "Music & Performance",
-    tier: 5,
-    tags: [
-      { zh: "声乐", en: "Singing" },
-      { zh: "钢琴", en: "Piano" },
-      { zh: "小提琴", en: "Violin" },
-      { zh: "吉他", en: "Guitar" },
-      { zh: "古筝", en: "Guzheng" },
-      { zh: "琵琶", en: "Pipa" },
-      { zh: "架子鼓", en: "Drums" },
-      { zh: "萨克斯", en: "Saxophone" },
-      { zh: "长笛", en: "Flute" },
-      { zh: "作曲", en: "Composition" },
-      { zh: "音乐制作", en: "Music Production" },
-      { zh: "合唱", en: "Choir" },
-      { zh: "芭蕾", en: "Ballet" },
-      { zh: "现代舞", en: "Contemporary Dance" },
-      { zh: "民族舞", en: "Folk Dance" },
-      { zh: "爵士舞", en: "Jazz Dance" },
-      { zh: "街舞", en: "Street Dance" },
-      { zh: "拉丁舞", en: "Latin Dance" },
-      { zh: "戏剧表演", en: "Theater" },
-      { zh: "京剧", en: "Peking Opera" },
-      { zh: "歌剧", en: "Opera" },
-      { zh: "朗诵", en: "Recitation" },
-      { zh: "主持", en: "Hosting" },
-      { zh: "脱口秀", en: "Stand-Up Comedy" },
-      { zh: "魔术", en: "Magic" },
-      { zh: "配音", en: "Voice Acting" },
-      { zh: "影视表演", en: "Film Acting" },
-      { zh: "导演", en: "Directing" },
-      { zh: "舞台设计", en: "Stage Design" },
-    ],
-  },
-  {
-    zh: "文学与创作",
-    en: "Literature & Writing",
-    tier: 5,
-    tags: [
-      { zh: "阅读小说", en: "Reading Novels" },
-      { zh: "文学创作", en: "Creative Writing" },
-      { zh: "诗词创作", en: "Poetry" },
-      { zh: "外语学习", en: "Language Learning" },
-      { zh: "演讲", en: "Public Speaking" },
-      { zh: "辩论", en: "Debating" },
-      { zh: "手语", en: "Sign Language" },
-      { zh: "写书评", en: "Book Reviews" },
-      { zh: "写影评", en: "Film Reviews" },
-      { zh: "藏书", en: "Book Collecting" },
-      { zh: "书信写作", en: "Letter Writing" },
-      { zh: "日记写作", en: "Journaling" },
-      { zh: "自媒体写作", en: "Content Writing" },
-      { zh: "同人小说创作", en: "Fan Fiction" },
-      { zh: "科普写作", en: "Science Writing" },
-      { zh: "剧本创作", en: "Screenwriting" },
-    ],
-  },
-  {
-    zh: "运动与竞技",
-    en: "Sports & Athletics",
-    tier: 2,
-    tags: [
-      { zh: "跑步", en: "Running" },
-      { zh: "健走", en: "Walking" },
-      { zh: "徒步", en: "Hiking" },
-      { zh: "登山", en: "Mountaineering" },
-      { zh: "攀岩", en: "Rock Climbing" },
-      { zh: "攀冰", en: "Ice Climbing" },
-      { zh: "滑雪", en: "Skiing" },
-      { zh: "滑冰", en: "Ice Skating" },
-      { zh: "轮滑", en: "Roller Skating" },
-      { zh: "滑板", en: "Skateboarding" },
-      { zh: "冲浪", en: "Surfing" },
-      { zh: "帆板", en: "Windsurfing" },
-      { zh: "帆船", en: "Sailing" },
-      { zh: "赛艇", en: "Rowing" },
-      { zh: "皮划艇", en: "Kayaking" },
-      { zh: "独木舟", en: "Canoeing" },
-      { zh: "游泳", en: "Swimming" },
-      { zh: "自由潜水", en: "Freediving" },
-      { zh: "水肺潜水", en: "Scuba Diving" },
-      { zh: "浮潜", en: "Snorkeling" },
-      { zh: "跳水", en: "Diving Boards" },
-      { zh: "花样游泳", en: "Synchronized Swimming" },
-      { zh: "钓鱼", en: "Fishing" },
-      { zh: "飞盘", en: "Frisbee" },
-      { zh: "高尔夫", en: "Golf" },
-      { zh: "网球", en: "Tennis" },
-      { zh: "羽毛球", en: "Badminton" },
-      { zh: "乒乓球", en: "Table Tennis" },
-      { zh: "壁球", en: "Squash" },
-      { zh: "保龄球", en: "Bowling" },
-      { zh: "台球", en: "Billiards" },
-      { zh: "篮球", en: "Basketball" },
-      { zh: "足球", en: "Football" },
-      { zh: "排球", en: "Volleyball" },
-      { zh: "沙滩排球", en: "Beach Volleyball" },
-      { zh: "橄榄球", en: "Rugby" },
-      { zh: "棒球", en: "Baseball" },
-      { zh: "垒球", en: "Softball" },
-      { zh: "曲棍球", en: "Field Hockey" },
-      { zh: "冰球", en: "Ice Hockey" },
-      { zh: "马术", en: "Equestrian" },
-      { zh: "击剑", en: "Fencing" },
-      { zh: "射箭", en: "Archery" },
-      { zh: "射击", en: "Shooting" },
-      { zh: "拳击", en: "Boxing" },
-      { zh: "散打", en: "Sanda" },
-      { zh: "跆拳道", en: "Taekwondo" },
-      { zh: "空手道", en: "Karate" },
-      { zh: "柔道", en: "Judo" },
-      { zh: "合气道", en: "Aikido" },
-      { zh: "泰拳", en: "Muay Thai" },
-      { zh: "巴西柔术", en: "BJJ" },
-      { zh: "摔跤", en: "Wrestling" },
-      { zh: "太极拳", en: "Tai Chi" },
-      { zh: "少林拳", en: "Shaolin" },
-      { zh: "咏春拳", en: "Wing Chun" },
-      { zh: "气功", en: "Qigong" },
-      { zh: "瑜伽", en: "Yoga" },
-      { zh: "普拉提", en: "Pilates" },
-      { zh: "健美操", en: "Aerobics" },
-      { zh: "广场舞", en: "Square Dance" },
-      { zh: "尊巴", en: "Zumba" },
-      { zh: "动感单车", en: "Spinning" },
-      { zh: "力量训练", en: "Weight Training" },
-      { zh: "举重", en: "Weightlifting" },
-      { zh: "CrossFit", en: "CrossFit" },
-      { zh: "体操", en: "Gymnastics" },
-      { zh: "艺术体操", en: "Rhythmic Gymnastics" },
-      { zh: "蹦床", en: "Trampoline" },
-      { zh: "跑酷", en: "Parkour" },
-      { zh: "自行车骑行", en: "Cycling" },
-      { zh: "摩托车骑行", en: "Motorcycling" },
-      { zh: "卡丁车", en: "Go-Karting" },
-      { zh: "跳伞", en: "Skydiving" },
-      { zh: "滑翔伞", en: "Paragliding" },
-      { zh: "热气球", en: "Hot Air Balloon" },
-    ],
-  },
-  {
-    zh: "健康与养生",
-    en: "Health & Wellness",
-    tier: 4,
-    tags: [
-      { zh: "定向越野", en: "Orienteering" },
-      { zh: "拓展训练", en: "Outdoor Training" },
-      { zh: "军事训练体验", en: "Military Training" },
-      { zh: "八段锦", en: "Baduanjin" },
-      { zh: "五禽戏", en: "Five Animals Qigong" },
-      { zh: "健身气功", en: "Fitness Qigong" },
-      { zh: "按摩", en: "Massage" },
-      { zh: "推拿", en: "Tuina" },
-      { zh: "针灸", en: "Acupuncture" },
-      { zh: "拔罐", en: "Cupping" },
-      { zh: "刮痧", en: "Gua Sha" },
-      { zh: "芳香疗法", en: "Aromatherapy" },
-      { zh: "冥想", en: "Meditation" },
-      { zh: "正念练习", en: "Mindfulness" },
-      { zh: "森林浴", en: "Forest Bathing" },
-      { zh: "园艺疗法", en: "Horticultural Therapy" },
-      { zh: "经络拍打", en: "Meridian Tapping" },
-      { zh: "足底按摩", en: "Reflexology" },
-      { zh: "呼吸训练", en: "Breathwork" },
-      { zh: "体态矫正", en: "Posture Correction" },
-      { zh: "柔韧性训练", en: "Flexibility Training" },
-      { zh: "平衡训练", en: "Balance Training" },
-      { zh: "营养学研究", en: "Nutrition" },
-      { zh: "健康饮食实践", en: "Healthy Eating" },
-      { zh: "养生功法", en: "Health Exercises" },
-      { zh: "水中健身", en: "Aqua Fitness" },
-      { zh: "康复训练", en: "Rehab Training" },
-    ],
-  },
-  {
-    zh: "知识与学习",
-    en: "Knowledge & Learning",
-    tier: 5,
-    tags: [
-      { zh: "数学", en: "Mathematics" },
-      { zh: "物理学", en: "Physics" },
-      { zh: "化学实验", en: "Chemistry" },
-      { zh: "生物学观察", en: "Biology" },
-      { zh: "地理学探索", en: "Geography" },
-      { zh: "环境科学", en: "Environmental Science" },
-      { zh: "心理学", en: "Psychology" },
-      { zh: "社会学", en: "Sociology" },
-      { zh: "人类学", en: "Anthropology" },
-      { zh: "历史学研读", en: "History" },
-      { zh: "考古学", en: "Archaeology" },
-      { zh: "哲学思考", en: "Philosophy" },
-      { zh: "逻辑学训练", en: "Logic" },
-      { zh: "经济学", en: "Economics" },
-      { zh: "金融学", en: "Finance" },
-      { zh: "管理学", en: "Management" },
-      { zh: "法学", en: "Law" },
-      { zh: "教育学", en: "Education" },
-      { zh: "医学常识", en: "Medical Knowledge" },
-      { zh: "中医学", en: "TCM" },
-      { zh: "语言学", en: "Linguistics" },
-      { zh: "文学研究", en: "Literature Studies" },
-      { zh: "艺术史", en: "Art History" },
-      { zh: "音乐史", en: "Music History" },
-      { zh: "电影史", en: "Film History" },
-      { zh: "科技史", en: "Tech History" },
-      { zh: "参加学术讲座", en: "Academic Lectures" },
-      { zh: "加入读书会", en: "Book Clubs" },
-    ],
-  },
-  {
-    zh: "科技与数字",
-    en: "Tech & Digital",
-    tier: 3,  // interesting nerd +1
-    tags: [
-      { zh: "Python编程", en: "Python" },
-      { zh: "算法研究", en: "Algorithms" },
-      { zh: "数据结构", en: "Data Structures" },
-      { zh: "人工智能", en: "AI" },
-      { zh: "机器学习", en: "Machine Learning" },
-      { zh: "深度学习", en: "Deep Learning" },
-      { zh: "数据科学", en: "Data Science" },
-      { zh: "大数据处理", en: "Big Data" },
-      { zh: "网络安全", en: "Cybersecurity" },
-      { zh: "Web开发", en: "Web Dev" },
-      { zh: "移动应用开发", en: "Mobile Dev" },
-      { zh: "游戏开发", en: "Game Dev" },
-      { zh: "3D建模", en: "3D Modeling" },
-      { zh: "无人机操作", en: "Drone Flying" },
-      { zh: "无人机编程", en: "Drone Programming" },
-      { zh: "机器人技术", en: "Robotics" },
-      { zh: "软件工程", en: "Software Engineering" },
-      { zh: "数据库管理", en: "Database" },
-      { zh: "电子制作", en: "Electronics DIY" },
-    ],
-  },
-  {
-    zh: "科学与探索",
-    en: "Science & Exploration",
-    tier: 3,  // interesting +1
-    tags: [
-      { zh: "望远镜观测", en: "Telescope Gazing" },
-      { zh: "气象观测", en: "Weather Watching" },
-      { zh: "地质勘探", en: "Geology" },
-      { zh: "化石采集", en: "Fossil Collecting" },
-      { zh: "矿物收集", en: "Mineral Collecting" },
-      { zh: "植物分类学", en: "Plant Taxonomy" },
-      { zh: "鸟类观察", en: "Birdwatching" },
-      { zh: "昆虫观察", en: "Insect Watching" },
-      { zh: "动物行为观察", en: "Animal Behavior" },
-      { zh: "观星认星座", en: "Stargazing" },
-      { zh: "天体摄影", en: "Astrophotography" },
-      { zh: "家庭科学小实验", en: "Home Experiments" },
-      { zh: "科普阅读", en: "Science Reading" },
-      { zh: "古建筑研究", en: "Historic Buildings" },
-      { zh: "家谱研究", en: "Genealogy" },
-      { zh: "历史遗迹探访", en: "Historic Sites" },
-      { zh: "地图收藏", en: "Map Collecting" },
-      { zh: "邮票收藏", en: "Stamp Collecting" },
-      { zh: "模型收藏", en: "Model Collecting" },
-      { zh: "档案馆查阅", en: "Archive Research" },
-    ],
-  },
-  {
-    zh: "竞技与策略",
-    en: "Games & Strategy",
-    tier: 2,
-    tags: [
-      { zh: "围棋", en: "Go" },
-      { zh: "象棋", en: "Chinese Chess" },
-      { zh: "国际象棋", en: "Chess" },
-      { zh: "将棋", en: "Shogi" },
-      { zh: "五子棋", en: "Gomoku" },
-      { zh: "跳棋", en: "Checkers" },
-      { zh: "军棋", en: "Army Chess" },
-      { zh: "飞行棋", en: "Aeroplane Chess" },
-      { zh: "桥牌", en: "Bridge" },
-      { zh: "扑克", en: "Poker" },
-      { zh: "麻将", en: "Mahjong" },
-      { zh: "桌游", en: "Board Games" },
-      { zh: "电子竞技", en: "Esports" },
-      { zh: "网络游戏", en: "Online Gaming" },
-      { zh: "密室逃脱", en: "Escape Rooms" },
-      { zh: "剧本杀", en: "Murder Mystery" },
-      { zh: "魔方", en: "Rubik's Cube" },
-      { zh: "数独", en: "Sudoku" },
-      { zh: "填字游戏", en: "Crosswords" },
-      { zh: "谜题破解", en: "Puzzle Solving" },
-      { zh: "知识竞赛", en: "Quiz Games" },
-      { zh: "答题游戏", en: "Trivia" },
-      { zh: "策略游戏", en: "Strategy Games" },
-      { zh: "模拟经营游戏", en: "Sim Games" },
-      { zh: "赛车游戏", en: "Racing Games" },
-      { zh: "王者荣耀", en: "Honor of Kings" },
-      { zh: "原神", en: "Genshin Impact" },
-      { zh: "DOTA2", en: "DOTA2" },
-      { zh: "塞尔达", en: "Zelda" },
-      { zh: "脑筋急转弯", en: "Riddles" },
-      { zh: "逻辑推理训练", en: "Logic Training" },
-      { zh: "批判性思维", en: "Critical Thinking" },
-    ],
-  },
-  {
-    zh: "社交与活动",
-    en: "Social & Events",
-    tier: 1,
-    tags: [
-      { zh: "朋友聚会", en: "Hangouts" },
-      { zh: "家庭聚会", en: "Family Gatherings" },
-      { zh: "同学聚会", en: "Reunions" },
-      { zh: "同事聚餐", en: "Work Dinners" },
-      { zh: "社区活动", en: "Community Events" },
-      { zh: "志愿者服务", en: "Volunteering" },
-      { zh: "慈善捐助", en: "Donations" },
-      { zh: "公益活动", en: "Charity" },
-      { zh: "环保行动", en: "Eco Action" },
-      { zh: "动物保护", en: "Animal Welfare" },
-      { zh: "音乐会欣赏", en: "Concerts" },
-      { zh: "戏剧观赏", en: "Theater Watching" },
-      { zh: "音乐剧欣赏", en: "Musicals" },
-      { zh: "艺术展览参观", en: "Art Exhibitions" },
-      { zh: "动物园游览", en: "Zoo Visits" },
-      { zh: "植物园漫步", en: "Botanical Garden" },
-      { zh: "水族馆参观", en: "Aquarium" },
-      { zh: "主题公园游玩", en: "Theme Parks" },
-      { zh: "真人CS", en: "Airsoft" },
-      { zh: "集体徒步", en: "Group Hiking" },
-      { zh: "乐队排练演出", en: "Band Practice" },
-      { zh: "摄影俱乐部外拍", en: "Photo Club" },
-      { zh: "品酒会", en: "Wine Tasting" },
-      { zh: "咖啡品鉴会", en: "Coffee Tasting" },
-      { zh: "美食分享会", en: "Food Sharing" },
-      { zh: "语言交换学习", en: "Language Exchange" },
-      { zh: "粉丝见面会", en: "Fan Events" },
-      { zh: "生日派对策划", en: "Birthday Parties" },
-      { zh: "乔迁暖房", en: "Housewarming" },
-      { zh: "告别单身派对", en: "Bachelor Party" },
-      { zh: "周年纪念庆祝", en: "Anniversary" },
-      { zh: "相亲交友", en: "Blind Dates" },
-      { zh: "恋爱经营", en: "Relationship Building" },
-    ],
-  },
-  {
-    zh: "生活与居家",
-    en: "Lifestyle & Home",
-    tier: 1,
-    tags: [
-      { zh: "烹饪", en: "Cooking" },
-      { zh: "烘焙", en: "Baking" },
-      { zh: "料理研究", en: "Culinary Research" },
-      { zh: "美食探索", en: "Food Exploring" },
-      { zh: "品茶", en: "Tea Tasting" },
-      { zh: "品咖啡", en: "Coffee Tasting" },
-      { zh: "品酒", en: "Wine Tasting" },
-      { zh: "调酒", en: "Mixology" },
-      { zh: "营养搭配", en: "Meal Planning" },
-      { zh: "园艺", en: "Gardening" },
-      { zh: "种花", en: "Flower Growing" },
-      { zh: "种菜", en: "Vegetable Growing" },
-      { zh: "盆栽", en: "Bonsai Potting" },
-      { zh: "盆景", en: "Bonsai" },
-      { zh: "家居布置", en: "Home Decoration" },
-      { zh: "室内设计", en: "Interior Design" },
-      { zh: "收纳整理", en: "Organizing" },
-      { zh: "断舍离", en: "Decluttering" },
-      { zh: "清洁打扫", en: "Cleaning" },
-      { zh: "宠物饲养", en: "Pet Keeping" },
-      { zh: "宠物训练", en: "Pet Training" },
-      { zh: "宠物美容", en: "Pet Grooming" },
-      { zh: "水族饲养", en: "Aquarium Keeping" },
-      { zh: "植物养护", en: "Plant Care" },
-      { zh: "护肤研究", en: "Skincare" },
-      { zh: "美妆", en: "Makeup" },
-      { zh: "发型设计", en: "Hair Styling" },
-      { zh: "服装搭配", en: "Outfit Styling" },
-      { zh: "时尚研究", en: "Fashion" },
-      { zh: "购物", en: "Shopping" },
-      { zh: "逛街", en: "Street Browsing" },
-      { zh: "探店", en: "Shop Exploring" },
-      { zh: "旅行规划", en: "Travel Planning" },
-      { zh: "理财规划", en: "Financial Planning" },
-      { zh: "投资研究", en: "Investing" },
-      { zh: "记账", en: "Budgeting" },
-      { zh: "写日记", en: "Journaling" },
-      { zh: "节日庆祝筹备", en: "Holiday Planning" },
-      { zh: "礼物挑选", en: "Gift Picking" },
-      { zh: "急救知识", en: "First Aid" },
-      { zh: "环保生活实践", en: "Eco Living" },
-    ],
-  },
-  {
-    zh: "摄影与影像",
-    en: "Photo & Media",
-    tier: 1,
-    tags: [
-      { zh: "摄影", en: "Photography" },
-      { zh: "写真", en: "Portrait Photos" },
-      { zh: "天文摄影", en: "Astrophotography" },
-      { zh: "视频剪辑", en: "Video Editing" },
-      { zh: "视频记录生活", en: "Vlogging" },
-      { zh: "自媒体", en: "Content Creation" },
-      { zh: "看电影", en: "Movies" },
-      { zh: "追剧", en: "Series Watching" },
-      { zh: "看动漫", en: "Anime" },
-      { zh: "看cult片", en: "Cult Films" },
-      { zh: "纪录片", en: "Documentaries" },
-      { zh: "写影评", en: "Film Reviews" },
-      { zh: "播客", en: "Podcasting" },
-      { zh: "cosplay", en: "Cosplay" },
-    ],
-  },
-];
-
-const HOBBY_TAG_LIST = HOBBY_CATEGORIES.flatMap((c) =>
-  c.tags.map((t) => (typeof t === "string" ? t : t.zh)),
-);
 
 let _customHobbyTags = [];
 
 async function loadCustomHobbyTags() {
   try {
-    const res = await fetch("/custom-hobbies");
+    const res = await api("/custom-hobbies");
     _customHobbyTags = await res.json();
   } catch (e) {
     _customHobbyTags = [];
@@ -3976,44 +3535,32 @@ function buildHobbyTags(containerId) {
   _customHobbyTags.forEach((t) => {
     const obj =
       typeof t === "string" ? { tag: t, categoryZh: null, tier: 1 } : t;
-    const key = obj.categoryZh || "__custom__";
+    // 没有分类的旧标签放进第一个分类（不再单独显示「自定义」分类）
+    const key = HOBBY_CATEGORIES.some((c) => c.zh === obj.categoryZh) ? obj.categoryZh : HOBBY_CATEGORIES[0].zh;
     if (!customByCategory[key]) customByCategory[key] = [];
     customByCategory[key].push(obj);
   });
 
   let html = HOBBY_CATEGORIES.map((cat) => {
-    let catHtml = `<div class="hobby-cat-label">${cat.zh} / ${cat.en}</div>`;
+    let catHtml = `<div class="hobby-cat-label" data-zh="${cat.zh}">${cat.zh} / ${cat.en}</div>`;
     catHtml += cat.tags
       .map((t) => {
         const zh = typeof t === "string" ? t : t.zh;
         const en = typeof t === "string" ? "" : t.en;
         const display = en ? `${zh} / ${en}` : zh;
-        return `<span class="hobby-tag tier-${cat.tier}" data-tier="${cat.tier}" data-zh="${zh}" onclick="toggleHobbyTag(this)">${display}</span>`;
+        return `<span class="hobby-tag tier-${cat.tier}" data-tier="${cat.tier}" data-zh="${zh}" data-en="${en}" onclick="toggleHobbyTag(this)">${display}</span>`;
       })
       .join("");
     if (customByCategory[cat.zh]) {
       catHtml += customByCategory[cat.zh]
         .map(
           (obj) =>
-            `<span class="hobby-tag tier-${obj.tier}" data-tier="${obj.tier}" data-zh="${obj.tag}" onclick="toggleHobbyTag(this)">${obj.tag}</span>`,
+            `<span class="hobby-tag tier-${obj.tier}" data-tier="${obj.tier}" data-zh="${escapeHtml(obj.tag)}" data-custom data-noi18n onclick="toggleHobbyTag(this)">${escapeHtml(obj.tag)}</span>`,
         )
         .join("");
     }
     return catHtml;
   }).join("");
-
-  if (
-    customByCategory["__custom__"] &&
-    customByCategory["__custom__"].length > 0
-  ) {
-    html += `<div class="hobby-cat-label hobby-cat-label-custom">自定义 / Custom</div>`;
-    html += customByCategory["__custom__"]
-      .map(
-        (obj) =>
-          `<span class="hobby-tag tier-${obj.tier}" data-tier="${obj.tier}" data-zh="${obj.tag}" onclick="toggleHobbyTag(this)">${obj.tag}</span>`,
-      )
-      .join("");
-  }
 
   wrap.innerHTML = html;
 }
@@ -4022,6 +3569,8 @@ function getHobbyScore() {
   const tags = document.querySelectorAll("#hobby-tags .hobby-tag.selected");
   let total = 0;
   tags.forEach((el) => {
+    // 自定义爱好不加不减（分类是用户自己选的，按分类给分就能刷分）
+    if (el.dataset.custom !== undefined) return;
     const tier = parseInt(el.dataset.tier || "4", 10);
     if (tier === 0) total += 3;       // 堕落放松 → relatable/authentic
     else if (tier === 1) total += 2;  // 兽人特色 → unique/interesting
@@ -4052,33 +3601,13 @@ function getSelectedHobbyTags(containerId) {
     document.querySelectorAll(`#${containerId} .hobby-tag.selected`),
   )
     .map((el) => {
-      const zh = el.dataset.zh || "";
-      const full = el.textContent.trim();
-      // full is "zh / en"; if it contains " / " return as-is, else return zh
-      return full.includes(" / ") ? full : zh || full;
+      // 从 data-zh / data-en 拼，不读页面文字（单语模式下页面上只剩一种语言）
+      const zh = el.dataset.zh || el.textContent.trim();
+      const en = el.dataset.en || "";
+      return en ? `${zh} / ${en}` : zh;
     })
     .join(" · ");
 }
-
-function setHobbyTags(containerId, hobbyStr) {
-  buildHobbyTags(containerId);
-  if (!hobbyStr) return;
-  // Support both old Chinese-only and new "zh / en" bilingual stored formats
-  const selected = new Set(
-    hobbyStr.split(" · ").map((s) => {
-      const t = s.trim();
-      const slashIdx = t.indexOf(" / ");
-      return slashIdx !== -1 ? t.slice(0, slashIdx).trim() : t;
-    }),
-  );
-  document.querySelectorAll(`#${containerId} .hobby-tag`).forEach((el) => {
-    const zh = el.dataset.zh || el.textContent.trim();
-    if (selected.has(zh)) el.classList.add("selected");
-  });
-}
-
-let _editHobbyStr = "";
-let _editHobbyExpanded = false;
 
 // ── 择偶标准 Mate Standards ────────────────────────────────────
 const MATE_STANDARDS = [
@@ -4090,8 +3619,8 @@ const MATE_STANDARDS = [
   { zh: "有怪癖",       en: "Quirky OK" },
   { zh: "无浓烈异味",   en: "No Strong Odor" },
   { zh: "气味合拍",     en: "Scent Compatible" },
-  { zh: "作息昼出夜伏", en: "Nocturnal" },
-  { zh: "作息昼伏夜出", en: "Diurnal" },
+  { zh: "作息昼出夜伏", en: "Diurnal" },
+  { zh: "作息昼伏夜出", en: "Nocturnal" },
   { zh: "冬眠同步",     en: "Sync Hibernation" },
   { zh: "毛发整洁",     en: "Groomed Fur" },
   { zh: "换毛期可接受", en: "Shedding OK" },
@@ -4156,7 +3685,37 @@ const MATE_STANDARDS = [
   { zh: "接受前任",     en: "Ex History OK" },
   { zh: "无前任联系",   en: "No Ex Contact" },
   { zh: "愿意见家长",   en: "Meet Parents OK" },
-  { zh: "不管家长",     en: "Family-Free Zone" },
+  { zh: "不用见家长",   en: "No Meeting the Parents" },
+  { zh: "秒回消息",     en: "Replies Instantly" },
+  { zh: "能查手机",     en: "Lets Me Check Their Phone" },
+  { zh: "有钱就行",     en: "Rich Is Enough" },
+  { zh: "富二代",       en: "Trust Fund Kid" },
+  { zh: "可以养我",     en: "Will Support Me" },
+  { zh: "父母双亡",     en: "No Living Parents" },
+  // ── 奇怪的 ──
+  { zh: "接受SM",       en: "BDSM OK" },
+  { zh: "已婚",         en: "Married" },
+  { zh: "怀孕中",       en: "Pregnant" },
+  { zh: "接受开放关系", en: "Open Relationship OK" },
+  { zh: "接受出轨",     en: "Cheating OK" },
+  { zh: "接受三人行",   en: "Threesome OK" },
+  { zh: "只约不恋",     en: "No Strings Attached" },
+  { zh: "愿意当备胎",   en: "Happy to Be Backup" },
+  { zh: "刚离婚",       en: "Freshly Divorced" },
+  { zh: "带着幼崽",     en: "Comes with Cubs" },
+  { zh: "有前科",       en: "Has a Record" },
+  { zh: "恋足癖",       en: "Paw Fetish" },
+  { zh: "戴项圈",       en: "Wears a Collar" },
+  { zh: "想被圈养",     en: "Wants to Be Kept" },
+  { zh: "愿意当饲主",   en: "Willing to Be Owner" },
+  { zh: "发情期同步",   en: "Synced Heat Cycle" },
+  { zh: "会咬人",       en: "Bites" },
+  { zh: "不洗澡也行",   en: "Baths Optional" },
+  { zh: "前任是我朋友", en: "Dated My Friend" },
+  { zh: "有毛就行",     en: "Any Fur Will Do" },
+  { zh: "恋爱脑",       en: "Love-Brained" },
+  { zh: "年上",         en: "Older Partner" },
+  { zh: "年下",         en: "Younger Partner" },
 ];
 
 function buildStandardsTags(containerId) {
@@ -4192,46 +3751,19 @@ function getSelectedStandardTags() {
     .join(" · ");
 }
 
-function setStandardTags(tagStr) {
-  buildStandardsTags("standards-tags");
-  if (!tagStr) return;
-  const selected = new Set(tagStr.split(" · ").map((s) => s.split(" / ")[0].trim()));
-  document.querySelectorAll("#standards-tags .hobby-tag").forEach((el) => {
-    if (selected.has(el.dataset.zh)) el.classList.add("selected");
-  });
-}
-
-function expandEditHobby() {
-  if (_editHobbyExpanded) return;
-  _editHobbyExpanded = true;
-  setHobbyTags("edit-hobby-tags", _editHobbyStr);
-  document.getElementById("edit-hobby-expanded").classList.remove("hidden");
-  document.getElementById("edit-hobby-collapsed").style.display = "none";
-}
-
-function collapseEditHobby() {
-  _editHobbyExpanded = false;
-  const selected = getSelectedHobbyTags("edit-hobby-tags");
-  _editHobbyStr = selected;
-  const summary = document.getElementById("edit-hobby-summary");
-  if (summary) summary.textContent = selected || "— 点击修改 / Click to edit —";
-  document.getElementById("edit-hobby-expanded").classList.add("hidden");
-  document.getElementById("edit-hobby-collapsed").style.display = "";
-  document.getElementById("edit-hobby-tags").innerHTML = "";
-}
-
 let _pendingCustomTag = null;
 let _pendingCustomContainerId = null;
 let _pendingCustomInputId = null;
 
 function addCustomHobbyTag(containerId, inputId) {
   const input = document.getElementById(inputId);
-  const tag = (input?.value || "").trim().slice(0, 20);
+  // 自定义标签不能有标点符号（输入时已过滤，这里再兜底一次）
+  const tag = _stripPunct(input?.value || "").trim().slice(0, 20);
   if (!tag) return;
 
   const existing = Array.from(
     document.querySelectorAll(`#${containerId} .hobby-tag`),
-  ).find((el) => el.textContent.trim() === tag);
+  ).find((el) => el.dataset.zh === tag);
   if (existing) {
     existing.classList.add("selected");
     input.value = "";
@@ -4243,9 +3775,10 @@ function addCustomHobbyTag(containerId, inputId) {
   _pendingCustomInputId = inputId;
 
   const list = document.getElementById("hobby-cat-picker-list");
+  // 用 data-index 传分类：原来 JSON.stringify 产生的双引号会截断 onclick="..."，点了没反应
   list.innerHTML = HOBBY_CATEGORIES.map(
-    (cat) =>
-      `<button class="hobby-cat-option" onclick="confirmCustomHobbyTag(${JSON.stringify(cat.zh)},${cat.tier})">${cat.zh} / ${cat.en}</button>`,
+    (cat, i) =>
+      `<button class="hobby-cat-option" data-index="${i}" onclick="const c=HOBBY_CATEGORIES[this.dataset.index];confirmCustomHobbyTag(c.zh,c.tier)">${cat.zh} / ${cat.en}</button>`,
   ).join("");
   document.getElementById("hobby-cat-picker").classList.remove("hidden");
 }
@@ -4257,52 +3790,50 @@ function confirmCustomHobbyTag(categoryZh, tier) {
   closeHobbyCatPicker();
   if (!tag) return;
 
-  fetch("/custom-hobbies", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ tag, categoryZh, tier }),
-  })
-    .then((r) => r.json())
-    .then(() => {
-      const exists = _customHobbyTags.find(
-        (t) => (typeof t === "string" ? t : t.tag) === tag,
-      );
-      if (!exists) _customHobbyTags.push({ tag, categoryZh, tier });
-
-      const wrap = document.getElementById(containerId);
-      if (wrap) {
-        const labels = Array.from(wrap.querySelectorAll(".hobby-cat-label"));
-        const targetLabel = labels.find((lbl) =>
-          lbl.textContent.includes(categoryZh),
-        );
-        const el = document.createElement("span");
-        el.className = `hobby-tag tier-${tier} selected`;
-        el.dataset.tier = tier;
-        el.onclick = () => toggleHobbyTag(el);
-        el.textContent = tag;
-        if (targetLabel) {
-          let node = targetLabel.nextSibling;
-          let last = targetLabel;
-          while (node && !node.classList?.contains("hobby-cat-label")) {
-            last = node;
-            node = node.nextSibling;
-          }
-          last.after(el);
-        } else {
-          let customLabel = wrap.querySelector(".hobby-cat-label-custom");
-          if (!customLabel) {
-            customLabel = document.createElement("div");
-            customLabel.className = "hobby-cat-label hobby-cat-label-custom";
-            customLabel.textContent = "自定义 / Custom";
-            wrap.appendChild(customLabel);
-          }
-          wrap.appendChild(el);
-        }
+  // 先只加在自己的页面上；等档案生成了，选中的自定义爱好才存进系统（_saveCustomHobbies）
+  const wrap = document.getElementById(containerId);
+  if (wrap) {
+    const labels = Array.from(wrap.querySelectorAll(".hobby-cat-label"));
+    const targetLabel = labels.find((lbl) => lbl.dataset.zh === categoryZh);
+    const el = document.createElement("span");
+    // 已经选满 5 个就只加进列表、不自动选中
+    const full = document.querySelectorAll(`#${containerId} .hobby-tag.selected`).length >= 5;
+    el.className = `hobby-tag tier-${tier}${full ? "" : " selected"}`;
+    el.dataset.tier = tier;
+    el.dataset.category = categoryZh;
+    el.dataset.custom = "";
+    el.dataset.new = "";
+    el.onclick = () => toggleHobbyTag(el);
+    el.textContent = tag;
+    el.dataset.zh = tag;
+    el.dataset.noi18n = "";
+    if (targetLabel) {
+      let node = targetLabel.nextSibling;
+      let last = targetLabel;
+      while (node && !node.classList?.contains("hobby-cat-label")) {
+        last = node;
+        node = node.nextSibling;
       }
+      last.after(el);
+    } else {
+      // 找不到分类标题时放在列表最后（不再单独建「自定义」分类）
+      wrap.appendChild(el);
+    }
+  }
 
-      const input = document.getElementById(inputId);
-      if (input) input.value = "";
-    });
+  const input = document.getElementById(inputId);
+  if (input) input.value = "";
+}
+
+// 生成档案后：这次新加、而且选中了的自定义爱好存进系统
+function _saveCustomHobbies() {
+  document.querySelectorAll("#hobby-tags .hobby-tag.selected[data-new]").forEach((el) => {
+    api("/custom-hobbies", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ tag: el.dataset.zh, categoryZh: el.dataset.category, tier: Number(el.dataset.tier) }),
+    }).catch(() => {});
+  });
 }
 
 function closeHobbyCatPicker() {
@@ -4559,12 +4090,12 @@ let longPressJustFired = false;
 
 // ── Pixel icon system ─────────────────────────────────────────
 
-function _makeIcon(pattern, px) {
+function _makeIcon(pattern, px, color = themeInk()) {
   const c = document.createElement("canvas");
   c.width = pattern[0].length * px;
   c.height = pattern.length * px;
   const ctx = c.getContext("2d");
-  ctx.fillStyle = "rgb(40,48,35)";
+  ctx.fillStyle = color;
   pattern.forEach((row, ry) =>
     row.forEach((v, rx) => {
       if (v) ctx.fillRect(rx * px, ry * px, px, px);
@@ -4641,6 +4172,32 @@ const _iconPatterns = {
     [1, 1, 1, 0, 1, 1, 1],
     [1, 1, 1, 1, 1, 1, 1],
   ],
+  // 点喜欢时的风险警告：大号像素三角，只画轮廓（镂空）+ 中间的「!」
+  warn_big: [
+    [0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0],
+    [0, 0, 0, 0, 0, 1, 0, 1, 0, 0, 0, 0, 0],
+    [0, 0, 0, 0, 0, 1, 0, 1, 0, 0, 0, 0, 0],
+    [0, 0, 0, 0, 1, 0, 1, 0, 1, 0, 0, 0, 0],
+    [0, 0, 0, 0, 1, 0, 1, 0, 1, 0, 0, 0, 0],
+    [0, 0, 0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 0],
+    [0, 0, 0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 0],
+    [0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0],
+    [0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0],
+    [0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0],
+    [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
+  ],
+  // 排行榜按钮：奖杯
+  trophy: [
+    [0, 0, 1, 1, 1, 1, 1, 1, 1, 0, 0],
+    [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
+    [1, 0, 1, 1, 1, 1, 1, 1, 1, 0, 1],
+    [1, 0, 1, 1, 1, 1, 1, 1, 1, 0, 1],
+    [0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0],
+    [0, 0, 0, 1, 1, 1, 1, 1, 0, 0, 0],
+    [0, 0, 0, 0, 1, 1, 1, 0, 0, 0, 0],
+    [0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0],
+    [0, 0, 0, 1, 1, 1, 1, 1, 0, 0, 0],
+  ],
   // pixel eye
   eye: [
     [0, 1, 1, 1, 1, 1, 0],
@@ -4648,6 +4205,26 @@ const _iconPatterns = {
     [1, 0, 0, 1, 0, 0, 1],
     [1, 0, 1, 1, 1, 0, 1],
     [0, 1, 1, 1, 1, 1, 0],
+  ],
+  // 密码框的小眼睛：睁眼（杏仁形眼眶 + 瞳孔）
+  pw_eye: [
+    [0, 0, 0, 0, 1, 1, 1, 1, 1, 0, 0, 0, 0],
+    [0, 0, 1, 1, 0, 0, 0, 0, 0, 1, 1, 0, 0],
+    [0, 1, 0, 0, 0, 1, 1, 1, 0, 0, 0, 1, 0],
+    [1, 0, 0, 0, 1, 1, 1, 1, 1, 0, 0, 0, 1],
+    [0, 1, 0, 0, 0, 1, 1, 1, 0, 0, 0, 1, 0],
+    [0, 0, 1, 1, 0, 0, 0, 0, 0, 1, 1, 0, 0],
+    [0, 0, 0, 0, 1, 1, 1, 1, 1, 0, 0, 0, 0],
+  ],
+  // 密码框的小眼睛：闭眼（向下弯的眼皮 + 睫毛）
+  pw_eye_closed: [
+    [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+    [1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1],
+    [0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0],
+    [0, 0, 1, 1, 0, 0, 0, 0, 0, 1, 1, 0, 0],
+    [0, 0, 0, 0, 1, 1, 1, 1, 1, 0, 0, 0, 0],
+    [0, 0, 0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 0],
+    [0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0],
   ],
   // pixel clock
   clock: [
@@ -4669,18 +4246,41 @@ const _iconPatterns = {
   ],
 };
 
-function getIcon(name, px = 3) {
-  const key = `${name}_${px}`;
-  if (!_iconCache[key]) _iconCache[key] = _makeIcon(_iconPatterns[name], px);
+// 换配色时要按新墨色重画页面上已有的图标：记下每张图标图片怎么重新生成
+const _iconRegen = new Map();
+
+function getIcon(name, px = 3, color) {
+  // 没指定颜色 = 用当前配色的墨色
+  const key = `${name}_${px}_${color || themeInk()}`;
+  if (!_iconCache[key]) {
+    _iconCache[key] = _makeIcon(_iconPatterns[name], px, color || themeInk());
+    if (!color) _iconRegen.set(_iconCache[key], () => getIcon(name, px));
+  }
   return _iconCache[key];
 }
 
-function iconImg(name, px = 3) {
+function iconImg(name, px = 3, color) {
   const p = _iconPatterns[name];
   const w = p[0].length * px,
     h = p.length * px;
-  return `<img src="${getIcon(name, px)}" width="${w}" height="${h}" style="image-rendering:pixelated;vertical-align:middle;">`;
+  return `<img src="${getIcon(name, px, color)}" width="${w}" height="${h}" style="image-rendering:pixelated;vertical-align:middle;">`;
 }
+
+// 换配色：页面上已有的像素图标 / 骰子 / 爱心按新墨色换掉，档案卡重画（头像也跟着变色）
+document.addEventListener("themechange", () => {
+  const oldHeart = getPixelHeartUrl._cache;
+  const oldVomit = getPixelVomitUrl._cache;
+  getPixelHeartUrl._cache = getPixelVomitUrl._cache = null;
+  document.querySelectorAll("img").forEach((img) => {
+    const src = img.getAttribute("src");
+    const regen = _iconRegen.get(src);
+    if (regen) img.src = regen();
+    else if (src && src === oldHeart) img.src = getPixelHeartUrl();
+    else if (src && src === oldVomit) img.src = getPixelVomitUrl();
+  });
+  if (document.getElementById("swipe-page")?.classList.contains("active")) showProfile();
+  _refreshMyProfileCard();
+});
 
 // Dice faces ⚀–⚅  (9×9 grid: border at 0/8, dots at 2/4/6 — 1-cell gap from border)
 const _diceDotSets = {
@@ -4717,14 +4317,14 @@ const _diceDotSets = {
   ],
 };
 function getDiceFaceUrl(n, px = 3) {
-  const key = `dice${n}_${px}`;
+  const key = `dice${n}_${px}_${themeInk()}`;
   if (_iconCache[key]) return _iconCache[key];
   const dots = _diceDotSets[n];
   const c = document.createElement("canvas");
   c.width = 9 * px;
   c.height = 9 * px;
   const ctx = c.getContext("2d");
-  ctx.fillStyle = "rgb(40,48,35)";
+  ctx.fillStyle = themeInk();
   for (let r = 0; r < 9; r++) {
     for (let col = 0; col < 9; col++) {
       if (
@@ -4738,6 +4338,7 @@ function getDiceFaceUrl(n, px = 3) {
     }
   }
   _iconCache[key] = c.toDataURL();
+  _iconRegen.set(_iconCache[key], () => getDiceFaceUrl(n, px));
   return _iconCache[key];
 }
 
@@ -4754,6 +4355,8 @@ function initPixelButtons() {
     msgBtn.innerHTML = iconImg("bubble", 3);
     if (badge) msgBtn.appendChild(badge);
   }
+  const rankBtn = document.getElementById("rank-btn");
+  if (rankBtn) rankBtn.innerHTML = iconImg("trophy", 3);
   // old-style dice buttons (income, edit form)
   document.querySelectorAll(".dice-btn").forEach((btn) => {
     btn.innerHTML = iconImg("dice", 3);
@@ -4793,70 +4396,18 @@ document.addEventListener("DOMContentLoaded", async () => {
     btn.innerHTML = diceFaceImg(6, 3);
   });
   initPixelButtons();
-  await loadCustomHobbyTags();
+  // 大家自定义过的爱好 / 性别 / 性取向 / 城市先取回来，合进选项里
+  await Promise.all([loadCustomHobbyTags(), loadCustomOptions()]);
   buildHobbyTags("hobby-tags");
   buildStandardsTags("standards-tags");
   buildCitySelectors("house");
+  _watchHouseSteps();
+  _watchSteps("profile-vehicle", _updateVehicleSteps);
+  _watchSteps("profile-sterilized", _updateRelSteps);
   buildCitySelectors("parents-father");
   buildCitySelectors("parents-mother");
+  _tryAutoLogin();
 });
-
-function getPixelHeartUrl() {
-  if (getPixelHeartUrl._cache) return getPixelHeartUrl._cache;
-  const pattern = [
-    [0, 1, 1, 0, 1, 1, 0],
-    [1, 1, 1, 1, 1, 1, 1],
-    [1, 1, 1, 1, 1, 1, 1],
-    [0, 1, 1, 1, 1, 1, 0],
-    [0, 0, 1, 1, 1, 0, 0],
-    [0, 0, 0, 1, 0, 0, 0],
-  ];
-  const px = 3;
-  const c = document.createElement("canvas");
-  c.width = 7 * px;
-  c.height = 6 * px;
-  const ctx = c.getContext("2d");
-  ctx.shadowColor = "rgba(40,48,35,0.65)";
-  ctx.shadowOffsetX = 2; ctx.shadowOffsetY = 2; ctx.shadowBlur = 0;
-  ctx.fillStyle = "rgb(40,48,35)";
-  pattern.forEach((row, ry) =>
-    row.forEach((v, rx) => {
-      if (v) ctx.fillRect(rx * px, ry * px, px, px);
-    }),
-  );
-  getPixelHeartUrl._cache = c.toDataURL();
-  return getPixelHeartUrl._cache;
-}
-
-function getPixelVomitUrl() {
-  if (getPixelVomitUrl._cache) return getPixelVomitUrl._cache;
-  const pattern = [
-    [0, 1, 1, 1, 1, 1, 0], // head top
-    [1, 0, 1, 0, 1, 0, 1], // X eyes top
-    [1, 1, 0, 1, 0, 1, 1], // X eyes bottom
-    [1, 1, 1, 1, 1, 1, 1], // cheeks
-    [1, 0, 0, 0, 0, 0, 1], // open mouth
-    [0, 1, 1, 1, 1, 1, 0], // chin
-    [0, 0, 1, 1, 1, 0, 0], // vomit start
-    [0, 1, 1, 1, 1, 1, 0], // vomit mid
-    [1, 1, 1, 1, 1, 1, 1], // vomit pool
-  ];
-  const px = 3;
-  const c = document.createElement("canvas");
-  c.width = 7 * px;
-  c.height = 9 * px;
-  const ctx = c.getContext("2d");
-  ctx.shadowColor = "rgba(40,48,35,0.65)";
-  ctx.shadowOffsetX = 2; ctx.shadowOffsetY = 2; ctx.shadowBlur = 0;
-  ctx.fillStyle = "rgb(40,48,35)";
-  pattern.forEach((row, ry) =>
-    row.forEach((v, rx) => {
-      if (v) ctx.fillRect(rx * px, ry * px, px, px);
-    }),
-  );
-  getPixelVomitUrl._cache = c.toDataURL();
-  return getPixelVomitUrl._cache;
-}
 
 function rollIncomeTierDice() {
   const btn = document.getElementById("petIncome-dice-btn");
@@ -4884,92 +4435,13 @@ function rollIncomeTierDice() {
   }, 70);
 }
 
-function rollIncomeDice(selectId, displayId, btnId) {
-  const btn = document.getElementById(btnId);
-  const display = document.getElementById(displayId);
-  btn.disabled = true;
-  let count = 0;
-  const interval = setInterval(() => {
-    display.innerHTML = diceFaceImg(Math.floor(Math.random() * 6) + 1, 4);
-    count++;
-    if (count >= 16) {
-      clearInterval(interval);
-      const result = Math.floor(Math.random() * 6) + 1;
-      display.innerHTML = diceFaceImg(result, 4);
-      if (result === 6) {
-        const sel = document.getElementById(selectId);
-        if (!Array.from(sel.options).some((o) => o.value === "30w+")) {
-          const opt = document.createElement("option");
-          opt.value = "30w+";
-          opt.textContent = "30w+ / 300k+";
-          sel.appendChild(opt);
-        }
-        sel.value = "30w+";
-        setTimeout(() => {
-          display.innerHTML = diceFaceImg(6, 4) + " !!!";
-        }, 100);
-      }
-      btn.disabled = false;
-    }
-  }, 70);
-}
-
-function fmt(v) {
-  if (!v || v === "—") return v || "—";
-  return v.replace(/\s*[·×\/]\s*/g, " ").replace(/\s{2,}/g, " ").trim() || "—";
-}
-
-// Two-line bilingual display: Chinese on top, English below
-function fmtBI(v) {
-  if (!v || v === "—") return "—";
-  // normalize "X/Y" (no spaces) → "X / Y" so both stored formats split correctly
-  const normalized = v.replace(/([^\s])\s*\/\s*([^\s])/g, "$1 / $2");
-  const segs = normalized.split(/\s*·\s*/);
-  const zhParts = [], enParts = [];
-  let hasBilingual = false;
-  for (let seg of segs) {
-    seg = seg.trim();
-    const slashIdx = seg.indexOf(" / ");
-    if (slashIdx !== -1) {
-      zhParts.push(seg.slice(0, slashIdx).trim());
-      enParts.push(seg.slice(slashIdx + 3).trim());
-      hasBilingual = true;
-    } else {
-      zhParts.push(seg);
-      enParts.push(seg);
-    }
-  }
-  const zhLine = zhParts.join("  ");
-  const enLine = enParts.join("  ");
-  if (hasBilingual) {
-    return `<span class="bi-zh">${zhLine}</span><span class="bi-en">${enLine}</span>`;
-  }
-  return `<span class="bi-zh">${zhLine}</span>`;
-}
-
-function buildTerritoryDisplay(profile) {
-  const h = profile.house;
-  if (!h || (!h.city && !h.district)) return profile.hukou || "—";
-  const parts = [];
-  if (h.city || h.district) parts.push([h.city, disp(h.district)].filter(Boolean).join(" "));
-  if (h.area) parts.push(`${h.area}㎡`);
-  if (h.type) {
-    const typeDisp = disp(h.type);
-    parts.push(h.type === "别墅" && h.villaFloors ? `${typeDisp} (${disp(h.villaFloors)})` : typeDisp);
-  }
-  if (h.garden === "有院子") parts.push(disp("有院子"));
-  if (h.aptFloor) parts.push(disp(h.aptFloor));
-  if (h.aptTotal) parts.push(disp(h.aptTotal));
-  if (h.price) parts.push(disp(h.price));
-  if (h.ownership) parts.push(disp(h.ownership));
-  if (h.mortgage) parts.push(disp(h.mortgage));
-  return parts.join(" · ") || profile.hukou || "—";
-}
-
 function renderValue(profile, field, valueText, extraClass = "") {
   const raw = profile.interpretations && profile.interpretations[field];
   const interps = Array.isArray(raw) ? raw : raw ? [raw] : [];
-  const display = fmtBI(valueText);
+  // 名字原样显示成一行，不按「中文 / English」拆开（名字里可能本来就有 /，比如 AC/DC）
+  const display = field === "name"
+    ? `<span class="bi-zh">${escapeHtml(valueText || "—")}</span>`
+    : fmtBI(valueText);
   if (interps.length > 0) {
     return `<span class="value ${extraClass} has-interpretations" data-field="${field}">${display}</span>`;
   }
@@ -4977,223 +4449,62 @@ function renderValue(profile, field, valueText, extraClass = "") {
 }
 
 function renderCardHTML(profile) {
-  const baseScore = profile.score ?? 60;
-  const skipCount = profile.skips ? profile.skips.length : 0;
-  const displayScore = Math.max(0, baseScore - skipCount);
-  const _sd = profile.date ? new Date(profile.date) : null;
-  const stampDate = _sd
-    ? `${_sd.getFullYear()}.${String(_sd.getMonth() + 1).padStart(2, "0")}.${String(_sd.getDate()).padStart(2, "0")}`
-    : "";
-  const stampColorClass = displayScore < 60 ? "stamp-red" : "";
+  // 每一栏的内容由 shared/card-data.js 的 cardValues 统一算出（大屏 web 也用同一份）
+  const c = cardValues(profile);
+  const cell = (zh, en, field, text, extra) => `
+    <div class="cell">
+      <span class="label"><span class="zh">${zh}</span> <small class="en">${en}</small></span>
+      ${renderValue(profile, field, text, extra)}
+    </div>`;
+  const section = (zh, en, field, text, extra) => `
+  <div class="section">
+    <span class="label"><span class="zh">${zh}</span> <small class="en">${en}</small></span>
+    ${renderValue(profile, field, text, extra)}
+  </div>`;
+  const row = (cells) => `
+  <div class="${cells.length === 1 ? "" : `grid-${cells.length}`}">${cells.join("")}
+  </div>`;
+  const stampColorClass = c.score < 60 ? "stamp-red" : "";
+  const pixels = (n, url, cls) =>
+    n === 0
+      ? '<span class="value" style="opacity:0.4">—</span>'
+      : Array(Math.min(n, 48)).fill(`<img src="${url}" class="${cls}">`).join("");
   return `
-<div class="card">
+<div class="card" data-noi18n>
 
   <div class="profile-score-stamp ${stampColorClass}">
-    <span class="stamp-date">${stampDate}</span>
-    <span class="stamp-num">${displayScore}</span>
+    <span class="stamp-date">${c.stampDate}</span>
+    <span class="stamp-num">${c.score}</span>
     <span class="stamp-lines"><span></span><span></span></span>
   </div>
 
   <div class="avatar-box">
-    <img src="${profile.grid ? renderGridAsAvatar(profile.grid, profile.gridText) : profile.avatar}" class="avatar">
+    <img src="${c.avatar}" class="avatar">
+  </div>
+${section("名字", "Name", "name", c.name, "big")}
+${section("物种", "Species", "breed", c.breed, "territory")}
+${row([cell("性别", "Gender", "gender", c.gender), cell("年龄", "Age", "age", c.age), cell("身高", "Height", "height", c.height)])}
+${row([cell("性取向", "Orientation", "orientation", c.orientation), cell("婚恋", "Status", "sterilized", c.status)])}
+${c.ships ? section("其他关系", "Other Ships", "ships", c.ships) : ""}
+${row([cell("MBTI", "", "mbti", c.mbti).replace(' <small class="en"></small>', "").replace('<span class="zh">MBTI</span>', "MBTI"), cell("星座", "Horoscope", "horoscope", c.horoscope)])}
+${section("领地", "Territory", "hukou", c.territory, "territory")}
+${section("车辆", "Vehicles", "vehicle", c.vehicle)}
+${row([cell("学历", "Education", "edu", c.edu), cell("职业", "Job", "occupation", c.occupation), cell("月收入", "Income", "income", c.income)])}
+${section("总资产", "Total Assets", "assets", c.assets)}
+${row([cell("目的", "Here For", "datingPurpose", c.datingPurpose), cell("期望关系", "Looking For", "relationshipGoal", c.relationshipGoal)])}
+${c.relRows.map((r) => row(r.map(([zh, en, key, text]) => cell(zh, en, key, text)))).join("")}
+${section("兴趣爱好", "Hobbies", "hobby", c.hobby)}
+${section("家庭状况", "Family", "parents", c.family)}
+${c.standards ? section("择偶标准", "Looking For", "standards", c.standards) : ""}
+
+  <div class="section">
+    <span class="label"><span class="zh">被喜欢</span> <small class="en">Liked</small></span>
+    <div class="pixel-hearts-box">${pixels(c.likes, getPixelHeartUrl(), "pixel-heart")}</div>
   </div>
 
   <div class="section">
-    <span class="label">名字 <small>Name</small></span>
-    ${renderValue(profile, "name", profile.name, "big")}
-  </div>
-
-  <div class="section">
-    <span class="label">物种 <small>Species</small></span>
-    ${renderValue(profile, "breed", (() => {
-      const sp = (v) => { if (!v) return null; const p = v.split(" · "); return p.length > 1 ? p.slice(1).join(" · ") : v; };
-      return profile.mixed && profile.breed2 ? `${sp(profile.breed) || "—"} × ${sp(profile.breed2)}（混血 Mixed）` : sp(profile.breed) || "—";
-    })(), "territory")}
-  </div>
-
-  <div class="grid-3">
-    <div class="cell">
-      <span class="label">性别 <small>Gender</small></span>
-      ${renderValue(profile, "gender", disp(profile.gender) || "—")}
-    </div>
-    <div class="cell">
-      <span class="label">年龄 <small>Age</small></span>
-      ${renderValue(profile, "age", profile.age || "—")}
-    </div>
-    <div class="cell">
-      <span class="label">身高 <small>Height</small></span>
-      ${renderValue(profile, "height", profile.height || "—")}
-    </div>
-  </div>
-
-  <div class="grid-2">
-    <div class="cell">
-      <span class="label">性取向 <small>Orientation</small></span>
-      ${renderValue(profile, "orientation", disp(profile.orientation) || "—")}
-    </div>
-    <div class="cell">
-      <span class="label">婚恋 <small>Status</small></span>
-      ${renderValue(profile, "sterilized", disp(profile.sterilized || profile.relationship?.status) || "—")}
-    </div>
-  </div>
-
-  <div class="grid-2">
-    <div class="cell">
-      <span class="label">MBTI</span>
-      ${renderValue(profile, "mbti", profile.mbti || "—", "big")}
-    </div>
-    <div class="cell">
-      <span class="label">星座 <small>Horoscope</small></span>
-      ${renderValue(profile, "horoscope", profile.horoscope || getHoroscope(profile.birth) || "—")}
-    </div>
-  </div>
-
-  <div class="section">
-    <span class="label">领地 <small>Territory</small></span>
-    ${renderValue(profile, "hukou", buildTerritoryDisplay(profile), "territory")}
-  </div>
-
-  <div class="section">
-    <span class="label">车辆 <small>Vehicles</small></span>
-    ${renderValue(profile, "vehicle", [
-      profile.vehicle?.types?.length ? profile.vehicle.types.join(" · ") : null,
-      profile.vehicle?.model || null,
-      profile.vehicle?.count ? disp(profile.vehicle.count) : null,
-      profile.vehicle?.price ? disp(profile.vehicle.price) : null,
-    ].filter(Boolean).join(" · ") || "—")}
-  </div>
-
-  <div class="grid-3">
-    <div class="cell">
-      <span class="label">学历 <small>Education</small></span>
-      ${renderValue(profile, "edu", disp(profile.edu) || "—")}
-    </div>
-    <div class="cell">
-      <span class="label">职业 <small>Job</small></span>
-      ${renderValue(profile, "occupation", disp(profile.occupation) || "—")}
-    </div>
-    <div class="cell">
-      <span class="label">月收入 <small>Income</small></span>
-      ${renderValue(profile, "income", disp(profile.income) || "—")}
-    </div>
-  </div>
-
-  <div class="grid-2">
-    <div class="cell">
-      <span class="label">目的 <small>Here For</small></span>
-      ${renderValue(profile, "datingPurpose", profile.relationship?.datingPurpose || "—")}
-    </div>
-    <div class="cell">
-      <span class="label">期望关系 <small>Looking For</small></span>
-      ${renderValue(profile, "relationshipGoal", profile.relationship?.relationshipGoal || "—")}
-    </div>
-  </div>
-
-  <div class="grid-3">
-    <div class="cell">
-      <span class="label">目前伴侣 <small>Partner</small></span>
-      ${renderValue(profile, "currentPartner", profile.relationship?.currentPartner || "—")}
-    </div>
-    <div class="cell">
-      <span class="label">伴侣数量 <small># Partners</small></span>
-      ${renderValue(profile, "partnerCount", profile.relationship?.partnerCount || "—")}
-    </div>
-    <div class="cell">
-      <span class="label">子女 <small>Kids</small></span>
-      ${renderValue(profile, "kids", profile.relationship?.kids || "—")}
-    </div>
-  </div>
-
-  <div class="grid-3">
-    <div class="cell">
-      <span class="label">暗恋 <small>Crush</small></span>
-      ${renderValue(profile, "crush", profile.relationship?.crush || "—")}
-    </div>
-    <div class="cell">
-      <span class="label">暧昧 <small>Ambiguous</small></span>
-      ${renderValue(profile, "ambiguous", profile.relationship?.ambiguous || "—")}
-    </div>
-    <div class="cell">
-      <span class="label">秘密伴侣 <small>Secret</small></span>
-      ${renderValue(profile, "secretPartner", profile.relationship?.secretPartner || "—")}
-    </div>
-  </div>
-
-  <div class="grid-3">
-    <div class="cell">
-      <span class="label">境外伴侣 <small>Foreign</small></span>
-      ${renderValue(profile, "foreignPartner", profile.relationship?.foreignPartner || "—")}
-    </div>
-    <div class="cell">
-      <span class="label">异地伴侣 <small>Long Dist</small></span>
-      ${renderValue(profile, "otherCityPartner", profile.relationship?.otherCityPartner || "—")}
-    </div>
-    <div class="cell">
-      <span class="label">白月光 <small>Moonlight</small></span>
-      ${renderValue(profile, "whiteMoonlight", profile.relationship?.whiteMoonlight || "—")}
-    </div>
-  </div>
-
-  <div class="grid-3">
-    <div class="cell">
-      <span class="label">谈过 <small>Past Rels</small></span>
-      ${renderValue(profile, "pastRelCount", profile.relationship?.pastRelCount || "—")}
-    </div>
-    <div class="cell">
-      <span class="label">前任联系 <small>Ex Contact</small></span>
-      ${renderValue(profile, "exContact", profile.relationship?.exContact || "—")}
-    </div>
-    <div class="cell">
-      <span class="label">还爱前任 <small>Still Love Ex</small></span>
-      ${renderValue(profile, "stillLoveEx", profile.relationship?.stillLoveEx || "—")}
-    </div>
-  </div>
-
-  <div class="section">
-    <span class="label">兴趣爱好 <small>Hobbies</small></span>
-    ${renderValue(profile, "hobby", profile.hobby || "—")}
-  </div>
-
-  <div class="section">
-    <span class="label">家庭状况 <small>Family</small></span>
-    ${renderValue(profile, "parents", [
-      profile.parents?.status ? disp(profile.parents.status) : null,
-      profile.parents?.relationship ? disp(profile.parents.relationship) : null,
-      profile.parents?.fatherOrigin ? `父(Dad) ${profile.parents.fatherOrigin}` : null,
-      profile.parents?.motherOrigin ? `母(Mom) ${profile.parents.motherOrigin}` : null,
-      (() => {
-        const cnt = profile.parents?.siblingCount;
-        if (!cnt) return null;
-        if (cnt === "独生/Only Child") return disp(cnt);
-        const wealth = profile.parents?.siblingWealth ? disp(profile.parents.siblingWealth) : null;
-        return [disp(cnt), wealth].filter(Boolean).join(" ");
-      })(),
-    ].filter(Boolean).join(" · ") || "—")}
-  </div>
-
-  ${profile.standards ? `<div class="section">
-    <span class="label">择偶标准 <small>Looking For</small></span>
-    ${renderValue(profile, "standards", profile.standards)}
-  </div>` : ""}
-
-  <div class="section">
-    <span class="label">被喜欢 <small>Liked</small></span>
-    <div class="pixel-hearts-box">${(() => {
-      const n = Math.min(profile.likes ? profile.likes.length : 0, 48);
-      if (n === 0) return '<span class="value" style="opacity:0.4">—</span>';
-      const h = getPixelHeartUrl();
-      return Array(n).fill(0).map(() => `<img src="${h}" class="pixel-heart">`).join("");
-    })()}</div>
-  </div>
-
-  <div class="section">
-    <span class="label">被跳过 <small>Skipped</small></span>
-    <div class="pixel-hearts-box">${(() => {
-      const n = Math.min(profile.skips ? profile.skips.length : 0, 48);
-      if (n === 0) return '<span class="value" style="opacity:0.4">—</span>';
-      const v = getPixelVomitUrl();
-      return Array(n).fill(0).map(() => `<img src="${v}" class="pixel-heart pixel-vomit">`).join("");
-    })()}</div>
+    <span class="label"><span class="zh">被跳过</span> <small class="en">Skipped</small></span>
+    <div class="pixel-hearts-box">${pixels(c.skips, getPixelVomitUrl(), "pixel-heart pixel-vomit")}</div>
   </div>
 
 </div>
@@ -5308,7 +4619,10 @@ function attachLabelHandlers(profileUsername, containerEl) {
     const fieldLocked = label.dataset.field;
     const clone = label.cloneNode(true);
     clone.querySelectorAll(".interp-bubble").forEach((b) => b.remove());
-    const labelTextLocked = clone.textContent.trim();
+    // 中文行 / 英文行分开取（卡片上两行都在，直接取 textContent 会粘成「单身Single」）
+    const zhLine = clone.querySelector(".bi-zh")?.textContent.trim() || clone.textContent.trim();
+    const enLine = clone.querySelector(".bi-en")?.textContent.trim() || zhLine;
+    const labelTextLocked = { zh: zhLine, en: enLine };
 
     longPressTimer = setTimeout(() => {
       longPressTimer = null;
@@ -5353,7 +4667,7 @@ function attachLabelHandlers(profileUsername, containerEl) {
       const fieldSpan = bubble.closest(".value[data-field]");
       const field = fieldSpan?.dataset.field;
       const interpIndex = parseInt(bubble.dataset.interpIndex);
-      fetch("/interpretation/agree", {
+      api("/interpretation/agree", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -5591,8 +4905,8 @@ function attachLabelHandlers(profileUsername, containerEl) {
 
 function openInterpPopup(field, profileUsername, labelText) {
   interpTarget = { field, profileUsername, labelText };
-  document.getElementById("interpret-label-name").textContent =
-    `"${labelText}" 对你来说意味着什么？`;
+  document.getElementById("interpret-label-name").innerHTML =
+    biHtml(`"${labelText.zh}" 对你来说意味着什么？`, `What does "${labelText.en}" mean to you?`);
   document.getElementById("interpret-input").value = "";
   document.getElementById("interpret-popup").classList.remove("hidden");
   document.getElementById("interpret-input").focus();
@@ -5624,7 +4938,7 @@ function submitInterpretation() {
     el.classList.add("has-interpretations");
   });
 
-  fetch("/interpretation", {
+  api("/interpretation", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ profileUsername, field, text, addedBy: currentUser.username }),
@@ -5954,8 +5268,8 @@ function buildWarnings(me, target) {
       warnings.push({
         level: "critical",
         lines: [
-          `MBTI 兼容指数：${compat}/10`,
-          `${me.mbti} × ${target.mbti} — 大数据显示此组合配对成功率极低`,
+          `MBTI 兼容指数：${compat}/10 / MBTI compatibility: ${compat}/10`,
+          `${escapeHtml(me.mbti)} × ${escapeHtml(target.mbti)} 大数据显示此组合配对成功率极低 / Big data says this pairing rarely works`,
           "你们大概率聊不到一起去 / You two will likely clash",
         ],
       });
@@ -5963,8 +5277,8 @@ function buildWarnings(me, target) {
       warnings.push({
         level: "warning",
         lines: [
-          `MBTI 兼容指数：${compat}/10`,
-          `根据大数据统计，${me.mbti} 和 ${target.mbti} 在相处中容易产生摩擦`,
+          `MBTI 兼容指数：${compat}/10 / MBTI compatibility: ${compat}/10`,
+          `根据大数据统计，${escapeHtml(me.mbti)} 和 ${escapeHtml(target.mbti)} 在相处中容易产生摩擦 / Statistically, ${escapeHtml(me.mbti)} and ${escapeHtml(target.mbti)} tend to clash`,
           "继续前请做好心理准备 / Proceed with caution",
         ],
       });
@@ -5976,7 +5290,7 @@ function buildWarnings(me, target) {
 
 function showLikeWarning(warnings) {
   const hasCritical = warnings.some((w) => w.level === "critical");
-  document.getElementById("warning-icon").textContent = "⚠️";
+  document.getElementById("warning-icon").innerHTML = iconImg("warn_big", 6, "#ff0000");
   document.getElementById("warning-icon").className = hasCritical
     ? "warning-icon critical"
     : "warning-icon";
@@ -6005,6 +5319,7 @@ function closeWarning() {
 // ── Like opener popup ─────────────────────────────────────────
 let _selectedOpener = null;
 let _selectedOpenerType = null;
+let _selectedOpenerText = null; // 发出去的是双语全文，收到的人按自己的语言看
 
 const OPENER_FIXED = [
   // normal — no penalty
@@ -6044,15 +5359,26 @@ const OPENER_FIXED = [
   { zh: "约吗", en: "Wanna hook up?", type: "flagged" },
 ];
 
+// 按对方档案生成的开场白（双语）；拆不出英文的（比如自定义爱好）英文里就用原词
 function _genProfileOpeners(p) {
   const out = [];
+  const zhEn = (v) => {
+    const [zh, en] = splitBi(v) || [v, v];
+    return [zh.trim(), en.trim()];
+  };
   if (p.hobby)
     p.hobby
       .split(" · ")
       .slice(0, 2)
-      .forEach((h) => out.push(`我也喜欢${h}！`));
-  if (p.mbti) out.push(`${p.mbti} 的你好！`);
-  if (p.occupation) out.push(`做${p.occupation.split("/")[0].trim()}是什么感觉？`);
+      .forEach((h) => {
+        const [zh, en] = zhEn(h);
+        out.push({ zh: `我也喜欢${zh}！`, en: `I like ${en} too!` });
+      });
+  if (p.mbti) out.push({ zh: `${p.mbti} 的你好！`, en: `Hi there, ${p.mbti}!` });
+  if (p.occupation) {
+    const [zh, en] = zhEn(p.occupation);
+    out.push({ zh: `做${zh}是什么感觉？`, en: `What's it like being a ${en}?` });
+  }
   return out.slice(0, 3);
 }
 
@@ -6064,7 +5390,7 @@ function openLikeOpenerPopup() {
 
   const profileOpeners = _genProfileOpeners(p);
   const allOpeners = [
-    ...profileOpeners.map((t) => ({ zh: t, en: "", type: "profile" })),
+    ...profileOpeners.map((o) => ({ ...o, type: "profile" })),
     ...OPENER_FIXED,
   ];
 
@@ -6072,7 +5398,7 @@ function openLikeOpenerPopup() {
     list
       .map(({ zh, en, type }) => {
         const display = en ? `${zh} / ${en}` : zh;
-        return `<span class="opener-chip opener-${type}" data-key="${zh}" data-type="${type}" data-display="${display.replace(/"/g, "&quot;")}">${display}</span>`;
+        return `<span class="opener-chip opener-${type}" data-key="${escapeHtml(zh)}" data-type="${type}" data-display="${escapeHtml(display)}">${escapeHtml(display)}</span>`;
       })
       .join("");
 
@@ -6096,7 +5422,7 @@ function openLikeOpenerPopup() {
   }
 
   document.getElementById("opener-selected-text").textContent =
-    "— 点击上方选择 —";
+    "点击上方选择 Click to select";
   document.getElementById("like-opener-popup").classList.remove("hidden");
 }
 
@@ -6106,6 +5432,7 @@ function selectOpener(key, type, display) {
   });
   _selectedOpener = key;
   _selectedOpenerType = type;
+  _selectedOpenerText = display || key;
   document.getElementById("opener-selected-text").textContent = display || key;
 }
 
@@ -6118,14 +5445,14 @@ function closeLikeOpenerPopup() {
 function submitLikeOpener() {
   if (!_selectedOpener || currentIndex >= profiles.length) return;
   const target = profiles[currentIndex];
-  const text = _selectedOpener;
+  const text = _selectedOpenerText || _selectedOpener;
   const type = _selectedOpenerType;
 
   closeLikeOpenerPopup();
 
   if (currentUser) {
     _cacheOutbox(currentUser.username, currentUser.name, target.username, target.name, text);
-    fetch("/messages", {
+    api("/messages", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -6165,7 +5492,7 @@ function doLike(label, reason) {
   if (currentIndex >= profiles.length) return;
   _consecutiveSkips = 0;
   const target = profiles[currentIndex];
-  fetch("/like", {
+  api("/like", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
@@ -6184,7 +5511,7 @@ function doLike(label, reason) {
 function checkNotifications() {
   if (!currentUser) return;
 
-  fetch(`/notifications/${currentUser.username}`)
+  api(`/notifications/${currentUser.username}`)
     .then((res) => res.json())
     .then((data) => {
       if (data.likesCount > 0) {
@@ -6193,12 +5520,49 @@ function checkNotifications() {
     });
 }
 
+// 「我」/ 排行榜开着时，骚扰弹窗、提醒、喜欢横幅都先不出来；关掉后消息弹窗和横幅再补上
+function _quietOverlayOpen() {
+  return ["me-overlay", "rank-overlay"].some((id) => !document.getElementById(id)?.classList.contains("hidden"));
+}
+let _pendingLikeBanner = null;
+// 打开「我」/ 排行榜时：正在显示的消息弹窗放回队列最前面，喜欢横幅先收起（它们层级比浮层高）
+function _quietOverlayEnter() {
+  if (popupShowing && currentPopupMsg) {
+    popupQueue.unshift(currentPopupMsg);
+    const popup = document.getElementById("msg-popup");
+    popup.classList.add("hidden");
+    popup.classList.remove("popup-slide-in");
+    popupShowing = false;
+    currentPopupMsg = null;
+  }
+  const banner = document.getElementById("like-banner");
+  if (banner) {
+    _pendingLikeBanner = parseInt(banner.querySelector("strong")?.textContent, 10) || 0;
+    banner.remove();
+  }
+}
+function _resumeAfterOverlay() {
+  if (_quietOverlayOpen()) return;
+  if (_pendingLikeBanner !== null) {
+    const n = _pendingLikeBanner;
+    _pendingLikeBanner = null;
+    _showLikeBanner(n);
+  }
+  if (!popupShowing) showNextPopup();
+}
+
 function _showLikeBanner(count) {
+  if (_quietOverlayOpen()) {
+    _pendingLikeBanner = count;
+    return;
+  }
   // Remove any existing banner first
   document.getElementById("like-banner")?.remove();
   const banner = document.createElement("div");
   banner.id = "like-banner";
-  banner.innerHTML = `${iconImg("heart_sm", 2)} 有 <strong>${count}</strong> 只兽人喜欢你！/ <strong>${count}</strong> anthros liked you!<button onclick="document.getElementById('like-banner')?.remove()">✕</button>`;
+  // 数字加粗会把句子切成几段，自动拆分认不出来，所以中英文分开标好
+  const n = Number(count) || 0;
+  banner.innerHTML = `${iconImg("heart_sm", 2)} <span data-noi18n><span class="zh">有 <strong>${n}</strong> 只兽人喜欢你！</span><span class="bi-sep"> / </span><span class="en"><strong>${n}</strong> anthros liked you!</span></span><button onclick="document.getElementById('like-banner')?.remove()">✕</button>`;
   document.body.appendChild(banner);
 }
 
@@ -6221,7 +5585,7 @@ function _cacheOutbox(from, fromName, to, toName, content) {
 
 function startMessagePolling() {
   if (!currentUser) return;
-  fetch(`/messages/${currentUser.username}`)
+  api(`/messages/${currentUser.username}`)
     .then((res) => res.json())
     .then((msgs) => {
       // 登录时对已有未读消息弹窗提示
@@ -6235,14 +5599,9 @@ function startMessagePolling() {
   msgPollingInterval = setInterval(fetchAndNotify, 15000);
 }
 
-function stopMessagePolling() {
-  if (msgPollingInterval) clearInterval(msgPollingInterval);
-  msgPollingInterval = null;
-}
-
 function fetchAndNotify() {
   if (!currentUser) return;
-  fetch(`/messages/${currentUser.username}`)
+  api(`/messages/${currentUser.username}`)
     .then((res) => res.json())
     .then((msgs) => {
       updateBadge(msgs);
@@ -6258,7 +5617,7 @@ function fetchAndNotify() {
 
 function fetchUnreadCount() {
   if (!currentUser) return;
-  fetch(`/messages/${currentUser.username}`)
+  api(`/messages/${currentUser.username}`)
     .then((res) => res.json())
     .then((msgs) => updateBadge(msgs));
 }
@@ -6278,6 +5637,26 @@ function updateBadge(msgs) {
 
 // ── 弹窗逻辑 ────────────────────────────────────────────────
 
+// 系统/假用户发的固定文案（双语）可以按语言拆开；真实用户自己打的字原样显示，不拆
+let _cannedMsgs = null;
+function _isCannedMsg(content) {
+  if (!_cannedMsgs) {
+    _cannedMsgs = new Set([
+      ..._FAKE_MSG_POOL, ..._MIXED_BLOOD_MSG_POOL, ..._SINGLE_QUESTION_POOL,
+      ...Object.values(_BREED_MSG_POOLS).flat(),
+      ...[..._FAKE_ALERT_POOL, ..._MIXED_BLOOD_ALERT_POOL].map((a) => a.content),
+      ...OPENER_FIXED.map((o) => (o.en ? `${o.zh} / ${o.en}` : o.zh)),
+    ]);
+  }
+  return (
+    _cannedMsgs.has(content) ||
+    /^(我也喜欢.+！ \/ I like .+ too!|.+ 的你好！ \/ Hi there, .+!|做.+是什么感觉？ \/ What's it like being a .+\?)$/.test(content)
+  );
+}
+const _noI18nAttr = (content) => (_isCannedMsg(content) ? "" : " data-noi18n");
+// 时间格式跟着语言走
+const _timeLocale = () => (currentLang === "en" ? "en-US" : "zh-CN");
+
 let popupQueue = [];
 let popupShowing = false;
 let currentPopupMsg = null;
@@ -6295,7 +5674,7 @@ function showNextPopup() {
   }
   // 只在 swipe-page 激活且 onboard-overlay 已关闭时才弹窗
   const onboardVisible = !document.getElementById("onboard-overlay")?.classList.contains("hidden");
-  if (!document.getElementById("swipe-page")?.classList.contains("active") || onboardVisible) {
+  if (!document.getElementById("swipe-page")?.classList.contains("active") || onboardVisible || _quietOverlayOpen()) {
     popupShowing = false;
     return;
   }
@@ -6308,8 +5687,12 @@ function showNextPopup() {
 
   const fromIcon = msg.alertStyle ? iconImg("warn", 3) : iconImg("envelope", 2);
   document.getElementById("msg-popup-from").innerHTML =
-    `${fromIcon} ${msg.alertStyle ? "" : "来自 "}${msg.fromName || msg.from}`;
-  document.getElementById("msg-popup-content").textContent = msg.content;
+    msg.alertStyle
+      ? `${fromIcon} ${escapeHtml(msg.fromName || msg.from)}`
+      : `${fromIcon} 来自 From <span data-noi18n>${escapeHtml(msg.fromName || msg.from)}</span>`;
+  const contentEl = document.getElementById("msg-popup-content");
+  contentEl.toggleAttribute("data-noi18n", !msg.alertStyle && !_isCannedMsg(msg.content));
+  contentEl.textContent = msg.content;
 
   const popup = document.getElementById("msg-popup");
   popup.classList.remove("hidden");
@@ -6373,10 +5756,10 @@ function loadMessages() {
 
   // 同时取收到的（用于角标）和所有收发（用于预览）
   // 若 /allMessages 不存在则降级到只用 /messages
-  const receivedP = fetch(`/messages/${currentUser.username}`)
+  const receivedP = api(`/messages/${currentUser.username}`)
     .then((r) => r.json())
     .catch(() => []);
-  const allP = fetch(`/allMessages/${currentUser.username}`)
+  const allP = api(`/allMessages/${currentUser.username}`)
     .then((r) => (r.ok ? r.json() : null))
     .catch(() => null);
 
@@ -6429,7 +5812,7 @@ function loadMessages() {
 
     list.innerHTML = conversations
       .map((c) => {
-        const time = new Date(c.latest.date).toLocaleString("zh-CN", {
+        const time = new Date(c.latest.date).toLocaleString(_timeLocale(), {
           month: "numeric",
           day: "numeric",
           hour: "2-digit",
@@ -6438,41 +5821,18 @@ function loadMessages() {
         const nameSafe = escapeHtml(c.name);
         const userSafe = escapeHtml(c.username);
         const preview = escapeHtml(c.latest.content);
-        const unreadBadge =
-          c.unread > 0
-            ? `<span class="convo-unread-badge">${c.unread}</span>`
-            : "";
+        // 未读：红点 + 红字（不显示数字）；已读：绿字
         return `
         <div class="msg-item ${c.unread > 0 ? "msg-unread" : "msg-read"}"
-             onclick="openConvoView('${userSafe}', '${nameSafe}')">
-          <div class="msg-from">${nameSafe}${unreadBadge}</div>
-          <div class="msg-content">${preview}</div>
+             data-user="${userSafe}" data-name="${nameSafe}"
+             onclick="openConvoView(this.dataset.user, this.dataset.name)">
+          <div class="msg-from" data-noi18n>${nameSafe}</div>
+          <div class="msg-content"${_noI18nAttr(c.latest.content)}>${preview}</div>
           <div class="msg-time">${time}</div>
         </div>`;
       })
       .join("");
   });
-}
-
-function markRead(id, el) {
-  fetch(`/messages/${id}/read`, { method: "PUT" })
-    .then((res) => res.json())
-    .then(() => {
-      el.classList.remove("msg-unread");
-      el.classList.add("msg-read");
-      fetchUnreadCount();
-    });
-}
-
-function openSendMessage() {
-  if (currentIndex >= profiles.length) return;
-  const target = profiles[currentIndex];
-  openMessages();
-  openConvoView(target.username, target.name);
-}
-
-function replyTo(username, name) {
-  openConvoView(username, name);
 }
 
 // ── Conversation thread view ─────────────────────────────────
@@ -6516,7 +5876,7 @@ function _renderConvoBubbles(msgs) {
 
   const unread = msgs.filter((m) => m.to === currentUser.username && !m.read);
   pendingReadPromise = Promise.all(
-    unread.map((m) => fetch(`/messages/${m.id}/read`, { method: "PUT" })),
+    unread.map((m) => api(`/messages/${m.id}/read`, { method: "PUT" })),
   );
 
   if (msgs.length === 0) {
@@ -6527,7 +5887,7 @@ function _renderConvoBubbles(msgs) {
   bubbles.innerHTML = msgs
     .map((m) => {
       const isMine = m.from === currentUser.username;
-      const time = new Date(m.date).toLocaleString("zh-CN", {
+      const time = new Date(m.date).toLocaleString(_timeLocale(), {
         month: "numeric",
         day: "numeric",
         hour: "2-digit",
@@ -6536,7 +5896,7 @@ function _renderConvoBubbles(msgs) {
       return `
         <div class="bubble-row ${isMine ? "bubble-mine" : "bubble-theirs"}">
           <div class="bubble">
-            <div class="bubble-text">${escapeHtml(m.content)}</div>
+            <div class="bubble-text"${_noI18nAttr(m.content)}>${escapeHtml(m.content)}</div>
             <div class="bubble-time">${time}</div>
           </div>
         </div>`;
@@ -6564,7 +5924,7 @@ function loadConvo() {
   const other = convoTarget.username;
 
   // 级别1: /conversation
-  fetch(`/conversation/${u1}/${u2}`)
+  api(`/conversation/${u1}/${u2}`)
     .then((res) => (res.ok ? res.json() : null))
     .then((msgs) => {
       if (msgs !== null) {
@@ -6572,7 +5932,7 @@ function loadConvo() {
         return;
       }
       // 级别2: /allMessages 过滤
-      return fetch(`/allMessages/${encodeURIComponent(currentUser.username)}`)
+      return api(`/allMessages/${encodeURIComponent(currentUser.username)}`)
         .then((r) => (r.ok ? r.json() : null))
         .then((all) => {
           if (all !== null) {
@@ -6585,7 +5945,7 @@ function loadConvo() {
             return;
           }
           // 级别3: /messages (只收件) + outbox 缓存
-          return fetch(`/messages/${encodeURIComponent(currentUser.username)}`)
+          return api(`/messages/${encodeURIComponent(currentUser.username)}`)
             .then((r) => (r.ok ? r.json() : []))
             .then((received) => {
               const fromOther = received.filter((m) => m.from === other);
@@ -6609,7 +5969,7 @@ function sendConvoMessage() {
   appendBubble(content, true);
   _cacheOutbox(currentUser.username, currentUser.name, convoTarget.username, convoTarget.name, content);
 
-  fetch("/messages", {
+  api("/messages", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
@@ -6629,7 +5989,7 @@ function appendBubble(content, isMine) {
   const empty = bubbles.querySelector(".convo-empty");
   if (empty) empty.remove();
 
-  const now = new Date().toLocaleString("zh-CN", {
+  const now = new Date().toLocaleString(_timeLocale(), {
     month: "numeric",
     day: "numeric",
     hour: "2-digit",
@@ -6639,19 +5999,11 @@ function appendBubble(content, isMine) {
   row.className = `bubble-row ${isMine ? "bubble-mine" : "bubble-theirs"}`;
   row.innerHTML = `
     <div class="bubble">
-      <div class="bubble-text">${escapeHtml(content)}</div>
+      <div class="bubble-text"${_noI18nAttr(content)}>${escapeHtml(content)}</div>
       <div class="bubble-time">${now}</div>
     </div>`;
   bubbles.appendChild(row);
   bubbles.scrollTop = bubbles.scrollHeight;
-}
-
-function escapeHtml(str) {
-  return str
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;");
 }
 
 // ── Swipe interrupt popups ──────────────────────────────────
@@ -6662,82 +6014,58 @@ let _profileShownAt = 0;
 let _currentSwipeProfileName = "";
 let _currentSwipeProfile = null;
 
-const _PROFILE_FIELD_LABELS = {
-  name: "名字",
-  breed: "物种",
-  gender: "性别",
-  age: "年龄",
-  hukou: "领地",
-  sterilized: "婚育状况",
-  mbti: "MBTI",
-  orientation: "性取向",
-  edu: "学历",
-  occupation: "职业",
-  income: "收入",
-  hobby: "爱好",
-};
-
 function _randInt(min, max) {
   return Math.floor(Math.random() * (max - min + 1)) + min;
 }
 
 function _pickInterruptName() {
   const names = profiles.map((p) => p.name || p.username).filter(Boolean);
-  if (names.length === 0) return "某兽人";
+  if (names.length === 0) return L("某兽人", "Someone");
   return names[_randInt(0, names.length - 1)];
 }
 
-function _pickNonEmptyProfileField() {
-  if (!_currentSwipeProfile) return null;
-  const entries = Object.entries(_PROFILE_FIELD_LABELS).filter(
-    ([k]) => _currentSwipeProfile[k] && String(_currentSwipeProfile[k]).trim(),
-  );
-  if (entries.length === 0) return null;
-  return entries[_randInt(0, entries.length - 1)];
-}
-
 function showSwipeInterrupt() {
+  if (_quietOverlayOpen()) return;
   const elapsed = _profileShownAt
     ? Math.floor((Date.now() - _profileShownAt) / 1000)
     : 0;
 
   // Real messages — only added when the data is meaningful
+  // 每条返回 [中文, English]；随机数、名字只取一次，中英文两半才对得上
   const real = [];
+  const cur = _currentSwipeProfileName;
   if (_consecutiveSkips >= 2) {
-    real.push(() => `你已连续跳过 ${_consecutiveSkips} 个档案了`);
+    real.push(() => [`你已连续跳过 ${_consecutiveSkips} 个档案了`, `You've skipped ${_consecutiveSkips} profiles in a row`]);
   }
-  if (elapsed >= 15 && _currentSwipeProfileName) {
-    real.push(
-      () =>
-        `你已经看「${_currentSwipeProfileName}」的档案 ${elapsed} 秒了，还不行动吗？`,
-    );
+  if (elapsed >= 15 && cur) {
+    real.push(() => [`你已经看「${cur}」的档案 ${elapsed} 秒了，还不行动吗？`, `You've been on "${cur}" for ${elapsed}s, still not moving?`]);
   }
-  if (elapsed >= 30 && _currentSwipeProfileName) {
-    real.push(() => `你在「${_currentSwipeProfileName}」的档案上停了这么久…`);
+  if (elapsed >= 30 && cur) {
+    real.push(() => [`你在「${cur}」的档案上停了这么久…`, `You've lingered on "${cur}" for so long…`]);
   }
 
   // Fake messages — always available
   const fake = [
-    () => `「${_pickInterruptName()}」查看了你的档案 ${_randInt(2, 18)} 次 / viewed your profile ${_randInt(2, 18)} times`,
-    () => `最近 ${_randInt(2, 7)} 只兽人拒绝了你 / ${_randInt(2, 7)} fursonas rejected you recently`,
-    () => `「${_pickInterruptName()}」刚刚跳过了你 / just skipped you`,
-    () => `「${_pickInterruptName()}」${_randInt(1, 8)} 分钟前看过你 / viewed you ${_randInt(1, 8)} min ago`,
-    () => `有 ${_randInt(1, 5)} 只兽人在等你回复 / ${_randInt(1, 5)} fursonas are waiting for your reply`,
-    () => `「${_pickInterruptName()}」正在查看你的档案 / is viewing your profile`,
-    () => `你和「${_pickInterruptName()}」已错过 ${_randInt(2, 9)} 次 / you've missed each other ${_randInt(2, 9)} times`,
-    () => `「${_pickInterruptName()}」对你感到好奇 / is curious about you`,
-    () => `系统提示：你的魅力值正在下降 / System: your charm rating is dropping`,
-    () => `${_randInt(3, 20)} 只兽人今天跳过了你 / ${_randInt(3, 20)} fursonas skipped you today`,
+    (n = _pickInterruptName(), k = _randInt(2, 18)) => [`「${n}」查看了你的档案 ${k} 次`, `"${n}" viewed your profile ${k} times`],
+    (k = _randInt(2, 7)) => [`最近 ${k} 只兽人拒绝了你`, `${k} fursonas rejected you recently`],
+    (n = _pickInterruptName()) => [`「${n}」刚刚跳过了你`, `"${n}" just skipped you`],
+    (n = _pickInterruptName(), k = _randInt(1, 8)) => [`「${n}」${k} 分钟前看过你`, `"${n}" viewed you ${k} min ago`],
+    (k = _randInt(1, 5)) => [`有 ${k} 只兽人在等你回复`, `${k} fursonas are waiting for your reply`],
+    (n = _pickInterruptName()) => [`「${n}」正在查看你的档案`, `"${n}" is viewing your profile`],
+    (n = _pickInterruptName(), k = _randInt(2, 9)) => [`你和「${n}」已错过 ${k} 次`, `You and "${n}" have missed each other ${k} times`],
+    (n = _pickInterruptName()) => [`「${n}」对你感到好奇`, `"${n}" is curious about you`],
+    () => ["系统提示：你的魅力值正在下降", "System: your charm rating is dropping"],
+    (k = _randInt(3, 20)) => [`${k} 只兽人今天跳过了你`, `${k} fursonas skipped you today`],
   ];
 
   const pool = [...real, ...fake];
-  const text = pool[_randInt(0, pool.length - 1)]();
+  const [zh, en] = pool[_randInt(0, pool.length - 1)]();
 
   const el = document.createElement("div");
   el.className = "swipe-interrupt";
   el.style.top = _randInt(8, 65) + "vh";
   el.style.left = _randInt(4, 52) + "vw";
-  el.innerHTML = `${text}<button class="interrupt-close" onclick="this.parentElement.remove()">✕</button>`;
+  el.innerHTML = `${biHtml(zh, en)}<button class="interrupt-close" onclick="this.parentElement.remove()">✕</button>`;
   document.body.appendChild(el);
 }
 
@@ -6759,12 +6087,12 @@ function startSwipeInterrupts() {
   schedule();
 }
 
+// 只暂停计时器，不删除已经弹出来的弹窗（打开我的档案/消息时它们保留）
 function stopSwipeInterrupts() {
   if (_interruptTimer) {
     clearTimeout(_interruptTimer);
     _interruptTimer = null;
   }
-  document.querySelectorAll(".swipe-interrupt").forEach((el) => el.remove());
   stopGenderedNotifications();
 }
 
@@ -6827,91 +6155,91 @@ const _FAKE_FEMALE_NAMES = [
 ];
 
 const _FAKE_MSG_POOL = [
-  "你好，看到你的档案感觉很有缘",
-  "嗨！我们好像很配哎，要聊聊吗？",
-  "你的兽设好可爱！我是来自上海的虎族",
-  "我觉得你就是我在找的那个人",
-  "你的兽人画像是自己画的吗？好厉害！",
-  "嗨，我喜欢你的爱好，我们有很多共同点",
-  "你好漂亮，敢问芳名吗？",
-  "我摇了个超级好的地产，想请你来参观",
-  "你的MBTI是我最喜欢的类型！！",
-  "嗨，你是我今天看到最好看的档案 ✨",
-  "我在附近，要不要出来喝杯咖啡 ☕",
-  "你好，冒昧打扰，我觉得你很特别",
-  "你有在玩游戏吗？可以一起吗？",
-  "哇你真的很符合我的理想型……",
-  "第一次用这个软件，看到你就想打招呼",
-  "我家有个很大的院子，你会喜欢的",
-  "你平时喜欢去哪里玩？",
-  "我的耳朵比你大，但我听你说话最认真",
-  "看到你第一眼就觉得命中注定了",
-  "我可以请你吃顿饭吗？我很会做菜的",
-  "你的档案分数好高，你一定是个很好的伴侣",
-  "我刷了好几遍才鼓起勇气来打招呼",
-  "你好，我也是喜欢夜晚活动的……",
-  "我们住得很近！要不要见个面？",
-  "你的耳朵好好看，是真的还是造型？",
-  "看到你滑过去了，赶紧搜到你打招呼",
-  "我平时很内向，但你的档案让我忍不住",
-  "你有在养其他宠物吗，还是你自己就是宠物型的",
-  "嗨，你好，我是附近的狼，请多关照",
-  "你的档案是我今天点开的第一个，缘分啊",
+  "你好，看到你的档案感觉很有缘 / Hi, I saw your profile and felt like it was fate",
+  "嗨！我们好像很配哎，要聊聊吗？ / Hey! We seem like a great match, wanna chat?",
+  "你的兽设好可爱！我是来自上海的虎族 / Your fursona is so cute! I'm a tiger from Shanghai",
+  "我觉得你就是我在找的那个人 / I think you're the one I've been looking for",
+  "你的兽人画像是自己画的吗？好厉害！ / Did you draw your anthro portrait yourself? So talented!",
+  "嗨，我喜欢你的爱好，我们有很多共同点 / Hi, I love your hobbies, we have so much in common",
+  "你好漂亮，敢问芳名吗？ / You're gorgeous, may I ask your name?",
+  "我摇了个超级好的地产，想请你来参观 / I rolled an amazing property, I'd love to show you around",
+  "你的MBTI是我最喜欢的类型！！ / Your MBTI is my favorite type!!",
+  "嗨，你是我今天看到最好看的档案 ✨ / Hey, you're the best-looking profile I've seen today ✨",
+  "我在附近，要不要出来喝杯咖啡 ☕ / I'm nearby, want to grab a coffee? ☕",
+  "你好，冒昧打扰，我觉得你很特别 / Hi, sorry to bother you, but I think you're really special",
+  "你有在玩游戏吗？可以一起吗？ / Do you play games? Can we play together?",
+  "哇你真的很符合我的理想型…… / Wow, you really match my ideal type...",
+  "第一次用这个软件，看到你就想打招呼 / First time using this app, saw you and had to say hi",
+  "我家有个很大的院子，你会喜欢的 / My place has a huge yard, you'd love it",
+  "你平时喜欢去哪里玩？ / Where do you usually like to go for fun?",
+  "我的耳朵比你大，但我听你说话最认真 / My ears are bigger than yours, but I listen to you most carefully",
+  "看到你第一眼就觉得命中注定了 / The moment I saw you I knew it was destiny",
+  "我可以请你吃顿饭吗？我很会做菜的 / Can I treat you to dinner? I'm a really good cook",
+  "你的档案分数好高，你一定是个很好的伴侣 / Your profile score is so high, you must be a great partner",
+  "我刷了好几遍才鼓起勇气来打招呼 / I scrolled past you several times before I worked up the courage to say hi",
+  "你好，我也是喜欢夜晚活动的…… / Hi, I'm a night owl too...",
+  "我们住得很近！要不要见个面？ / We live really close! Wanna meet up?",
+  "你的耳朵好好看，是真的还是造型？ / Your ears are so pretty, are they real or styled?",
+  "看到你滑过去了，赶紧搜到你打招呼 / Saw you slip past, so I searched you up to say hi",
+  "我平时很内向，但你的档案让我忍不住 / I'm usually really shy, but your profile made me do it",
+  "你有在养其他宠物吗，还是你自己就是宠物型的 / Do you keep other pets, or are you the pet type yourself?",
+  "嗨，你好，我是附近的狼，请多关照 / Hey hi, I'm the wolf from around here, nice to meet you",
+  "你的档案是我今天点开的第一个，缘分啊 / Yours is the first profile I opened today, must be fate",
 ];
 
 const _FAKE_ALERT_POOL = [
   {
-    from: "系统通知",
-    content: "⚠️ 警告：你已超过3天没有更新档案，魅力值持续下降",
+    from: "系统通知 / System Notice",
+    content: "⚠️ 警告：你已超过3天没有更新档案，魅力值持续下降 / ⚠️ Warning: you haven't updated your profile in 3 days, your charm keeps dropping",
   },
-  { from: "系统通知", content: "⚠️ 你的配对成功率低于行业平均水平12%" },
+  { from: "系统通知 / System Notice", content: "⚠️ 你的配对成功率低于行业平均水平12% / ⚠️ Your match rate is 12% below the industry average" },
   {
-    from: "系统通知",
-    content: "👀 本周已有47只兽人查看了你的档案，但无人主动打招呼",
+    from: "系统通知 / System Notice",
+    content: "👀 本周已有47只兽人查看了你的档案，但无人主动打招呼 / 👀 47 anthros viewed your profile this week, but no one said hi",
   },
-  { from: "系统通知", content: "⚠️ 检测到你有3条消息超过24小时未回复" },
-  { from: "系统通知", content: "💔 有人刚刚把你从收藏列表中移除了" },
-  { from: "系统通知", content: "⚠️ 你的账号活跃度即将降为低级，将减少曝光" },
-  { from: "系统通知", content: "❌ 本周你被跳过的次数较上周上升了34%" },
+  { from: "系统通知 / System Notice", content: "⚠️ 检测到你有3条消息超过24小时未回复 / ⚠️ You have 3 messages unanswered for over 24 hours" },
+  { from: "系统通知 / System Notice", content: "💔 有人刚刚把你从收藏列表中移除了 / 💔 Someone just removed you from their favorites" },
+  { from: "系统通知 / System Notice", content: "⚠️ 你的账号活跃度即将降为低级，将减少曝光 / ⚠️ Your account activity is about to drop to Low, reducing your exposure" },
+  { from: "系统通知 / System Notice", content: "❌ 本周你被跳过的次数较上周上升了34% / ❌ Times you got skipped this week are up 34% from last week" },
   {
-    from: "系统通知",
-    content: "⚠️ 有人查看了你的档案3次但没有打招呼，可能在犹豫",
+    from: "系统通知 / System Notice",
+    content: "⚠️ 有人查看了你的档案3次但没有打招呼，可能在犹豫 / ⚠️ Someone viewed your profile 3 times without saying hi, they may be hesitating",
   },
-  { from: "系统通知", content: "💬 你有2条未回复消息，对方可能已经等不及了" },
-  { from: "系统通知", content: "⚠️ 系统检测：你的照片吸引力评分低于平均值" },
+  { from: "系统通知 / System Notice", content: "💬 你有2条未回复消息，对方可能已经等不及了 / 💬 You have 2 unanswered messages, they may be running out of patience" },
+  { from: "系统通知 / System Notice", content: "⚠️ 系统检测：你的照片吸引力评分低于平均值 / ⚠️ System check: your photo attractiveness score is below average" },
 ];
 
 const _MIXED_BLOOD_MSG_POOL = [
-  "等一下，你是混血的？哪两个种族的混血啊",
-  "混血档案……说实话我一般不太考虑的，不好意思",
-  "我家里人接受不了混血的，这个我没办法",
-  "你是哪两个种族的混血？一般来说这个很重要",
-  "混血的话感觉基因比较复杂，你身体一般健康吗",
-  "我之前交往过混血的，结果很不好，不太想再试了",
-  "混血感觉挺特别的，但我家里比较传统",
-  "你的档案分数这么低，是因为混血那条吗",
-  "混血的外貌有时候挺奇特的……你真人看起来怎么样",
-  "老实说我不太了解混血，你们有什么特别之处吗",
+  "等一下，你是混血的？哪两个种族的混血啊 / Wait, you're mixed? Mixed with what two species?",
+  "混血档案……说实话我一般不太考虑的，不好意思 / Mixed profiles... honestly I don't usually consider them, sorry",
+  "我家里人接受不了混血的，这个我没办法 / My family can't accept mixed heritage, nothing I can do",
+  "你是哪两个种族的混血？一般来说这个很重要 / Which two species are you mixed with? That usually matters a lot",
+  "混血的话感觉基因比较复杂，你身体一般健康吗 / Mixed genes seem kind of complicated, are you generally healthy?",
+  "我之前交往过混血的，结果很不好，不太想再试了 / I dated someone mixed before and it went badly, I'd rather not try again",
+  "混血感觉挺特别的，但我家里比较传统 / Mixed heritage seems pretty unique, but my family is traditional",
+  "你的档案分数这么低，是因为混血那条吗 / Is your score this low because of the mixed-heritage thing?",
+  "混血的外貌有时候挺奇特的……你真人看起来怎么样 / Mixed looks can be kind of unusual... what do you look like in person?",
+  "老实说我不太了解混血，你们有什么特别之处吗 / Honestly I don't know much about mixed heritage, is there anything special about you?",
 ];
 
 const _MIXED_BLOOD_ALERT_POOL = [
-  { from: "系统通知", content: "⚠️ 系统检测：混血档案配对成功率比纯种低67%" },
-  { from: "系统通知", content: "❌ 你的档案因混血标注被12名用户主动屏蔽" },
+  { from: "系统通知 / System Notice", content: "⚠️ 系统检测：混血档案配对成功率比纯种低67% / ⚠️ System check: mixed profiles match 67% less often than purebreds" },
+  { from: "系统通知 / System Notice", content: "❌ 你的档案因混血标注被12名用户主动屏蔽 / ❌ 12 users blocked your profile because of the mixed-heritage tag" },
   {
-    from: "系统通知",
-    content: "⚠️ 大数据提示：混血档案在本地区配对指数处于最低段位",
+    from: "系统通知 / System Notice",
+    content: "⚠️ 大数据提示：混血档案在本地区配对指数处于最低段位 / ⚠️ Big data alert: mixed profiles rank lowest in local match index",
   },
   {
-    from: "系统通知",
-    content: "💔 系统检测：3名用户看到你的混血背景后取消了配对",
+    from: "系统通知 / System Notice",
+    content: "💔 系统检测：3名用户看到你的混血背景后取消了配对 / 💔 System check: 3 users unmatched after seeing your mixed background",
   },
   {
-    from: "系统通知",
-    content: "⚠️ 混血用户的曝光度已被系统调降，请升级会员以恢复可见度",
+    from: "系统通知 / System Notice",
+    content: "⚠️ 混血用户的曝光度已被系统调降，请升级会员以恢复可见度 / ⚠️ Mixed users' visibility has been lowered, upgrade to Premium to restore it",
   },
   {
-    from: "系统通知",
-    content: "⚠️ 平台提示：你的混血背景在本周筛选中被过滤了 8 次",
+    from: "系统通知 / System Notice",
+    content: "⚠️ 平台提示：你的混血背景在本周筛选中被过滤了 8 次 / ⚠️ Platform notice: your mixed background got filtered out 8 times this week",
   },
 ];
 
@@ -6922,710 +6250,710 @@ const _MIXED_BLOOD_ALERT_POOL = [
 const _BREED_MSG_POOLS = {
   // ── Specific keys first to win substring matching ──
   大熊猫: [
-    "大熊猫！太珍稀了，感觉很幸运能看到你的档案",
-    "你真的很喜欢吃竹子吗，还是这是刻板印象",
-    "你的眼圈是天生的吗，好特别好好看",
-    "大熊猫感觉特别受欢迎，你一定收到很多消息吧",
-    "你平时喜欢赖在地上打滚吗",
-    "大熊猫好稀少啊，遇到你感觉很幸运",
-    "你喜欢爬树吗，大熊猫好像还挺会爬的",
+    "大熊猫！太珍稀了，感觉很幸运能看到你的档案 / A giant panda! So rare, I feel lucky to see your profile",
+    "你真的很喜欢吃竹子吗，还是这是刻板印象 / Do you really love bamboo, or is that a stereotype?",
+    "你的眼圈是天生的吗，好特别好好看 / Are your eye patches natural? So unique and pretty",
+    "大熊猫感觉特别受欢迎，你一定收到很多消息吧 / Pandas seem so popular, you must get tons of messages",
+    "你平时喜欢赖在地上打滚吗 / Do you like rolling around on the floor?",
+    "大熊猫好稀少啊，遇到你感觉很幸运 / Giant pandas are so rare, I feel lucky to meet you",
+    "你喜欢爬树吗，大熊猫好像还挺会爬的 / Do you like climbing trees? Pandas seem pretty good at it",
   ],
   小熊猫: [
-    "小熊猫！颜色这么好看，感觉像秋天的颜色",
-    "你的尾巴有条纹吗，好想看看",
-    "小熊猫感觉特别灵巧，平时喜欢爬高处吗",
-    "你喜欢吃什么，小熊猫应该很挑食吧",
-    "看到你的档案感觉很温暖，不知道为什么",
-    "小熊猫的脸好圆，你真人一定也这样",
+    "小熊猫！颜色这么好看，感觉像秋天的颜色 / A red panda! Your colors are gorgeous, like autumn",
+    "你的尾巴有条纹吗，好想看看 / Is your tail striped? I'd love to see it",
+    "小熊猫感觉特别灵巧，平时喜欢爬高处吗 / Red pandas seem so nimble, do you like climbing high places?",
+    "你喜欢吃什么，小熊猫应该很挑食吧 / What do you like to eat? Red pandas must be picky eaters",
+    "看到你的档案感觉很温暖，不知道为什么 / Your profile feels so warm, I don't know why",
+    "小熊猫的脸好圆，你真人一定也这样 / Red pandas have such round faces, you must too in person",
   ],
   猎豹: [
-    "猎豹！速度最快的陆地种族，你跑起来一定很帅",
-    "你真的能跑那么快吗，想亲眼见一次",
-    "猎豹的花纹每只都不一样的吗",
-    "你平时体力消耗很大吧，休息的时候喜欢做什么",
-    "猎豹感觉很专注，做一件事就全力以赴对吗",
-    "你在感情里也是这么迅速果断吗",
+    "猎豹！速度最快的陆地种族，你跑起来一定很帅 / A cheetah! The fastest land species, you must look amazing running",
+    "你真的能跑那么快吗，想亲眼见一次 / Can you really run that fast? I want to see it myself",
+    "猎豹的花纹每只都不一样的吗 / Is every cheetah's pattern different?",
+    "你平时体力消耗很大吧，休息的时候喜欢做什么 / You must burn a lot of energy, what do you like to do when you rest?",
+    "猎豹感觉很专注，做一件事就全力以赴对吗 / Cheetahs seem so focused, all in on one thing at a time, right?",
+    "你在感情里也是这么迅速果断吗 / Are you this quick and decisive in relationships too?",
   ],
   雪豹: [
-    "雪豹！感觉最神秘的猫科种族，很难得见到",
-    "你适应寒冷的气候吗，城市里会不会不习惯",
-    "雪豹的花纹很特别，是那种模糊的斑点吗",
-    "你的尾巴特别长对吗，冷的时候会用来取暖吗",
-    "我觉得雪豹特别有一种孤傲的美，很吸引我",
-    "你喜欢高处还是低处，雪豹感觉天生就爱山顶",
+    "雪豹！感觉最神秘的猫科种族，很难得见到 / A snow leopard! The most mysterious feline, so rare to see",
+    "你适应寒冷的气候吗，城市里会不会不习惯 / Are you used to the cold? Is the city hard to get used to?",
+    "雪豹的花纹很特别，是那种模糊的斑点吗 / Snow leopard patterns are so unique, are they those blurry spots?",
+    "你的尾巴特别长对吗，冷的时候会用来取暖吗 / Your tail is extra long, right? Do you use it to keep warm?",
+    "我觉得雪豹特别有一种孤傲的美，很吸引我 / Snow leopards have this proud, lonely beauty that really draws me in",
+    "你喜欢高处还是低处，雪豹感觉天生就爱山顶 / Do you prefer high places or low? Snow leopards seem born for mountaintops",
   ],
   黑豹: [
-    "黑豹！全身黑色的猫科，气场太强了",
-    "你在暗处真的几乎隐形吗",
-    "黑豹的眼睛在黑暗里发光吗，好神秘",
-    "你平时是很安静的那种吗，感觉黑豹很沉稳",
-    "见到你档案第一眼就被吸引了，黑豹太好看了",
-    "你性格是内敛型还是强势型的",
+    "黑豹！全身黑色的猫科，气场太强了 / A black panther! All-black feline, what an aura",
+    "你在暗处真的几乎隐形吗 / Are you really almost invisible in the dark?",
+    "黑豹的眼睛在黑暗里发光吗，好神秘 / Do a black panther's eyes glow in the dark? So mysterious",
+    "你平时是很安静的那种吗，感觉黑豹很沉稳 / Are you the quiet type? Black panthers seem so composed",
+    "见到你档案第一眼就被吸引了，黑豹太好看了 / Your profile caught my eye instantly, black panthers are gorgeous",
+    "你性格是内敛型还是强势型的 / Are you more reserved or more dominant?",
   ],
   美洲豹: [
-    "美洲豹！感觉很有力量感的种族",
-    "你的花纹是玫瑰形的斑点吗，好特别",
-    "美洲豹会游泳对吗，你喜欢水吗",
-    "你力气很大吧，保护起自己在乎的人一定很有力",
-    "美洲豹感觉特别沉稳，不轻易动怒对吗",
-    "你在感情里是主动还是被动的那一方",
+    "美洲豹！感觉很有力量感的种族 / A jaguar! Such a powerful species",
+    "你的花纹是玫瑰形的斑点吗，好特别 / Are your spots those rosette shapes? So unique",
+    "美洲豹会游泳对吗，你喜欢水吗 / Jaguars can swim, right? Do you like water?",
+    "你力气很大吧，保护起自己在乎的人一定很有力 / You must be really strong, I bet you're great at protecting the ones you care about",
+    "美洲豹感觉特别沉稳，不轻易动怒对吗 / Jaguars seem so steady, not easily angered, right?",
+    "你在感情里是主动还是被动的那一方 / In relationships, are you the one who makes the first move?",
   ],
   猫头鹰: [
-    "猫头鹰！夜视能力是最好的之一，好厉害",
-    "你的头真的可以转将近270度吗，想亲眼见见",
-    "猫头鹰白天睡觉，那你晚上是不是特别活跃",
-    "你的羽毛飞起来很安静对吗，完全听不到声音",
-    "猫头鹰感觉特别智慧，跟你聊天感觉会学到很多",
-    "你会发出什么声音，是那种低沉的叫声吗",
+    "猫头鹰！夜视能力是最好的之一，好厉害 / An owl! One of the best night visions out there, amazing",
+    "你的头真的可以转将近270度吗，想亲眼见见 / Can your head really turn almost 270 degrees? I want to see it",
+    "猫头鹰白天睡觉，那你晚上是不是特别活跃 / Owls sleep in the day, so are you extra active at night?",
+    "你的羽毛飞起来很安静对吗，完全听不到声音 / Your feathers are totally silent in flight, right?",
+    "猫头鹰感觉特别智慧，跟你聊天感觉会学到很多 / Owls seem so wise, I bet I'd learn a lot talking to you",
+    "你会发出什么声音，是那种低沉的叫声吗 / What sounds do you make? That deep hooting kind?",
   ],
   猫鼬: [
-    "猫鼬！感觉特别机警的种族，什么都逃不过你们",
-    "猫鼬能免疫蛇毒吗，这个真的很厉害",
-    "你平时是群居的吗，猫鼬感觉很有团队意识",
-    "你站起来两足直立的时候一定很可爱",
-    "猫鼬感觉特别机灵，你聊天反应也这么快吗",
+    "猫鼬！感觉特别机警的种族，什么都逃不过你们 / A meerkat! Such an alert species, nothing gets past you",
+    "猫鼬能免疫蛇毒吗，这个真的很厉害 / Are meerkats really immune to snake venom? That's incredible",
+    "你平时是群居的吗，猫鼬感觉很有团队意识 / Do you live in a group? Meerkats seem like real team players",
+    "你站起来两足直立的时候一定很可爱 / You must look so cute standing up on two legs",
+    "猫鼬感觉特别机灵，你聊天反应也这么快吗 / Meerkats seem so clever, are you this quick when chatting too?",
   ],
   麝香猫: [
-    "麝香猫！感觉很特别的小型肉食动物",
-    "你是夜行性的吗，白天一般在做什么",
-    "麝香猫感觉很有个性，不太好驯服那种",
-    "你的嗅觉很灵敏吗，麝香猫感觉气息很独特",
-    "遇到麝香猫很少见，今天鼓起勇气打招呼",
+    "麝香猫！感觉很特别的小型肉食动物 / A civet! Such a unique little carnivore",
+    "你是夜行性的吗，白天一般在做什么 / Are you nocturnal? What do you usually do during the day?",
+    "麝香猫感觉很有个性，不太好驯服那种 / Civets seem so independent, the hard-to-tame type",
+    "你的嗅觉很灵敏吗，麝香猫感觉气息很独特 / Is your sense of smell really sharp? Civets have such a distinct scent",
+    "遇到麝香猫很少见，今天鼓起勇气打招呼 / Civets are so rare to meet, I worked up the courage to say hi today",
   ],
   龙猫: [
-    "龙猫！南美洲的小可爱，你的毛一定超软",
-    "你的耳朵是圆圆大大的吗，好可爱",
-    "龙猫的毛密度特别高对吗，摸起来是什么感觉",
-    "你喜欢洗沙浴吗，龙猫都这样吧",
-    "你平时爱跳跃吗，龙猫弹跳力好像很强",
-    "你本人和名字一样可爱吗，想认识你",
+    "龙猫！南美洲的小可爱，你的毛一定超软 / A chinchilla! South America's little cutie, your fur must be so soft",
+    "你的耳朵是圆圆大大的吗，好可爱 / Are your ears big and round? So cute",
+    "龙猫的毛密度特别高对吗，摸起来是什么感觉 / Chinchilla fur is super dense, right? What does it feel like?",
+    "你喜欢洗沙浴吗，龙猫都这样吧 / Do you like dust baths? All chinchillas do, right?",
+    "你平时爱跳跃吗，龙猫弹跳力好像很强 / Do you like jumping around? Chinchillas seem super bouncy",
+    "你本人和名字一样可爱吗，想认识你 / Are you as cute as your name? I'd love to get to know you",
   ],
   狐猫: [
-    "狐猫！感觉很奇特的种族，名字很有趣",
-    "你是晨昏活动型的吗，两头活跃",
-    "感觉狐猫不太常见，很高兴能认识你",
+    "狐猫！感觉很奇特的种族，名字很有趣 / A fossa! Such an unusual species, fun name too",
+    "你是晨昏活动型的吗，两头活跃 / Are you crepuscular? Active at dawn and dusk?",
+    "感觉狐猫不太常见，很高兴能认识你 / Fossas seem pretty rare, really happy to meet you",
   ],
   狐猴: [
-    "狐猴！感觉很特别的灵长类，眼睛一定很大",
-    "你的尾巴有条纹吗，感觉很好看",
-    "狐猴感觉特别灵活，爬树很厉害吧",
-    "你喜欢晒太阳吗，听说狐猴很爱这个",
-    "狐猴的眼睛在黑暗里会发光吗",
-    "你平时是群居的吗，狐猴感觉很爱热闹",
+    "狐猴！感觉很特别的灵长类，眼睛一定很大 / A lemur! Such a special primate, your eyes must be huge",
+    "你的尾巴有条纹吗，感觉很好看 / Is your tail striped? It must look great",
+    "狐猴感觉特别灵活，爬树很厉害吧 / Lemurs seem so agile, you must be great at climbing",
+    "你喜欢晒太阳吗，听说狐猴很爱这个 / Do you like sunbathing? I heard lemurs love it",
+    "狐猴的眼睛在黑暗里会发光吗 / Do lemur eyes glow in the dark?",
+    "你平时是群居的吗，狐猴感觉很爱热闹 / Do you live in a group? Lemurs seem to love company",
   ],
   耳廓狐: [
-    "耳廓狐！耳朵好大好好看，比脑袋还大吗",
-    "你的耳朵是用来散热的吗，好聪明的设计",
-    "耳廓狐感觉特别可爱，你平时爱撒娇吗",
-    "你是沙漠适应型的，城市里会不会太潮湿",
-    "看到你的档案第一反应就是耳朵，太特别了",
-    "你体型很小吗，感觉耳廓狐都小小的",
+    "耳廓狐！耳朵好大好好看，比脑袋还大吗 / A fennec fox! Your ears are so big, bigger than your head?",
+    "你的耳朵是用来散热的吗，好聪明的设计 / Are your ears for cooling off? What a clever design",
+    "耳廓狐感觉特别可爱，你平时爱撒娇吗 / Fennecs are so adorable, are you clingy and sweet?",
+    "你是沙漠适应型的，城市里会不会太潮湿 / You're built for the desert, is the city too humid for you?",
+    "看到你的档案第一反应就是耳朵，太特别了 / The first thing I noticed on your profile was the ears, so unique",
+    "你体型很小吗，感觉耳廓狐都小小的 / Are you small? Fennec foxes all seem so tiny",
   ],
   郊狼: [
-    "郊狼！感觉特别有适应力的种族",
-    "你真的什么都能吃吗，郊狼的适应性很强对吗",
-    "你叫声是那种很特别的嚎叫吗，好想听一次",
-    "郊狼感觉特别聪明，很难被骗对吗",
-    "你平时是独行还是群居，郊狼感觉两种都行",
-    "我觉得郊狼特别有生命力，很吸引我",
+    "郊狼！感觉特别有适应力的种族 / A coyote! Such an adaptable species",
+    "你真的什么都能吃吗，郊狼的适应性很强对吗 / Can you really eat anything? Coyotes are super adaptable, right?",
+    "你叫声是那种很特别的嚎叫吗，好想听一次 / Is your call that special howl? I'd love to hear it once",
+    "郊狼感觉特别聪明，很难被骗对吗 / Coyotes seem so smart, hard to fool, right?",
+    "你平时是独行还是群居，郊狼感觉两种都行 / Are you a loner or a pack animal? Coyotes seem fine either way",
+    "我觉得郊狼特别有生命力，很吸引我 / Coyotes have such a strong life force, it really draws me in",
   ],
   马鹿: [
-    "马鹿！感觉很有气势的鹿族，你的角一定很壮观",
-    "你的角每年都会换吗，换的时候是什么感觉",
-    "马鹿体型很大对吗，你身高多少",
-    "你奔跑起来一定很雄壮，想看看",
-    "马鹿感觉很有领地意识，你也是吗",
-    "你平时是群居的还是独行的",
+    "马鹿！感觉很有气势的鹿族，你的角一定很壮观 / A red deer! Such a majestic deer, your antlers must be impressive",
+    "你的角每年都会换吗，换的时候是什么感觉 / Do your antlers grow back every year? What does that feel like?",
+    "马鹿体型很大对吗，你身高多少 / Red deer are big, right? How tall are you?",
+    "你奔跑起来一定很雄壮，想看看 / You must look so powerful running, I'd love to see",
+    "马鹿感觉很有领地意识，你也是吗 / Red deer seem so territorial, are you too?",
+    "你平时是群居的还是独行的 / Do you live in a herd or on your own?",
   ],
   长颈鹿: [
-    "长颈鹿！感觉视野最好的种族，能看很远",
-    "你的身高很高吗，长颈鹿都这么高挑吗",
-    "你喝水的时候腿要叉开吗，好有趣",
-    "长颈鹿的舌头是紫色的对吗，为什么",
-    "你的斑纹图案是独特的吗，每只都不同",
-    "遇到长颈鹿感觉很特别，今天打招呼了",
+    "长颈鹿！感觉视野最好的种族，能看很远 / A giraffe! The species with the best view, you can see so far",
+    "你的身高很高吗，长颈鹿都这么高挑吗 / Are you really tall? Are all giraffes this tall and slender?",
+    "你喝水的时候腿要叉开吗，好有趣 / Do you have to spread your legs to drink water? So funny",
+    "长颈鹿的舌头是紫色的对吗，为什么 / Giraffe tongues are purple, right? Why is that?",
+    "你的斑纹图案是独特的吗，每只都不同 / Is your pattern unique? Every giraffe's is different",
+    "遇到长颈鹿感觉很特别，今天打招呼了 / Meeting a giraffe feels so special, so I said hi today",
   ],
   仓鼠: [
-    "仓鼠！超可爱，脸颊是鼓鼓的那种吗",
-    "你会把食物藏在颊囊里吗，好神奇",
-    "仓鼠喜欢跑轮吗，晚上会不停跑吗",
-    "你平时睡很久吗，仓鼠冬天会冬眠吗",
-    "仓鼠体型小小的，感觉特别可爱",
-    "你喜欢被抱吗，还是比较独立",
+    "仓鼠！超可爱，脸颊是鼓鼓的那种吗 / A hamster! So cute, do you have those puffy cheeks?",
+    "你会把食物藏在颊囊里吗，好神奇 / Do you stash food in your cheek pouches? Amazing",
+    "仓鼠喜欢跑轮吗，晚上会不停跑吗 / Do hamsters like running wheels? Do you run all night?",
+    "你平时睡很久吗，仓鼠冬天会冬眠吗 / Do you sleep a lot? Do hamsters hibernate in winter?",
+    "仓鼠体型小小的，感觉特别可爱 / Hamsters are so tiny, you must be adorable",
+    "你喜欢被抱吗，还是比较独立 / Do you like being held, or are you more independent?",
   ],
   花栗鼠: [
-    "花栗鼠！背上有条纹，超可爱",
-    "你的颊囊能装很多东西吗，感觉很厉害",
-    "花栗鼠感觉特别活泼，你平时闲不住吗",
-    "你喜欢藏食物吗，冬天会提前储存吗",
-    "感觉花栗鼠很讨人喜欢，你一定很受欢迎",
+    "花栗鼠！背上有条纹，超可爱 / A chipmunk! Stripes down your back, so cute",
+    "你的颊囊能装很多东西吗，感觉很厉害 / Can your cheek pouches hold a lot? That's impressive",
+    "花栗鼠感觉特别活泼，你平时闲不住吗 / Chipmunks seem so lively, can you never sit still?",
+    "你喜欢藏食物吗，冬天会提前储存吗 / Do you like hiding food? Do you stock up before winter?",
+    "感觉花栗鼠很讨人喜欢，你一定很受欢迎 / Chipmunks are so likable, you must be really popular",
   ],
   鼯鼠: [
-    "鼯鼠！会滑翔的松鼠，好厉害",
-    "你展开翼膜滑翔的样子一定很帅，想看看",
-    "你能滑翔多远，有没有什么记录",
-    "鼯鼠是夜行性的吗，夜晚出来活动",
-    "感觉鼯鼠特别特别，不常见到，很高兴认识你",
+    "鼯鼠！会滑翔的松鼠，好厉害 / A flying squirrel! A squirrel that glides, amazing",
+    "你展开翼膜滑翔的样子一定很帅，想看看 / You must look so cool gliding with your membranes spread, I want to see",
+    "你能滑翔多远，有没有什么记录 / How far can you glide? Do you have a record?",
+    "鼯鼠是夜行性的吗，夜晚出来活动 / Are flying squirrels nocturnal? Out and about at night?",
+    "感觉鼯鼠特别特别，不常见到，很高兴认识你 / Flying squirrels are so special and rare, really happy to meet you",
   ],
   松鼠: [
-    "松鼠！感觉特别活泼好动的种族",
-    "你真的会把食物埋起来然后找不到吗",
-    "松鼠的尾巴是大大蓬蓬的吗，好想看",
-    "你爬树很厉害吧，高处对你来说没什么难度",
-    "松鼠感觉精力很旺盛，你也是这样吗",
-    "你喜欢吃坚果吗，这个应该不是刻板印象",
+    "松鼠！感觉特别活泼好动的种族 / A squirrel! Such a lively, energetic species",
+    "你真的会把食物埋起来然后找不到吗 / Do you really bury food and then forget where?",
+    "松鼠的尾巴是大大蓬蓬的吗，好想看 / Is a squirrel's tail big and fluffy? I want to see",
+    "你爬树很厉害吧，高处对你来说没什么难度 / You must be a great climber, heights are nothing for you",
+    "松鼠感觉精力很旺盛，你也是这样吗 / Squirrels seem so full of energy, are you like that too?",
+    "你喜欢吃坚果吗，这个应该不是刻板印象 / Do you like nuts? That's probably not a stereotype",
   ],
   袋鼠: [
-    "袋鼠！感觉特别有力量的种族，腿很有劲",
-    "你的跳跃距离很远吧，能跳多远",
-    "袋鼠的尾巴很粗对吗，用来保持平衡",
-    "袋鼠族拳击真的很厉害对吗，你平时温和吗",
-    "你有育儿袋吗，感觉很特别",
-    "我一直很好奇袋鼠族，今天终于见到了",
+    "袋鼠！感觉特别有力量的种族，腿很有劲 / A kangaroo! Such a powerful species, strong legs",
+    "你的跳跃距离很远吧，能跳多远 / You must jump really far, how far can you go?",
+    "袋鼠的尾巴很粗对吗，用来保持平衡 / Kangaroo tails are thick, right? For balance?",
+    "袋鼠族拳击真的很厉害对吗，你平时温和吗 / Kangaroos are amazing boxers, right? Are you gentle normally?",
+    "你有育儿袋吗，感觉很特别 / Do you have a pouch? That's so special",
+    "我一直很好奇袋鼠族，今天终于见到了 / I've always been curious about kangaroos, finally met one today",
   ],
   羊驼: [
-    "羊驼！感觉很有个性的种族，表情很特别",
-    "你真的会吐口水吗，哪种情况下才会",
-    "羊驼的毛剪下来很软吗，是真正的羊驼绒",
-    "你平时是傲娇型的吗，感觉羊驼族都有点骄傲",
-    "感觉羊驼族特别有个性，很想认识你",
+    "羊驼！感觉很有个性的种族，表情很特别 / An alpaca! Such a quirky species, your expressions are so unique",
+    "你真的会吐口水吗，哪种情况下才会 / Do you really spit? In what situations?",
+    "羊驼的毛剪下来很软吗，是真正的羊驼绒 / Is alpaca fleece really soft when sheared? Real alpaca wool?",
+    "你平时是傲娇型的吗，感觉羊驼族都有点骄傲 / Are you the tsundere type? Alpacas all seem a bit proud",
+    "感觉羊驼族特别有个性，很想认识你 / Alpacas have so much personality, I'd love to get to know you",
   ],
   变色龙: [
-    "变色龙！变色能力真的很厉害，是根据情绪变色吗",
-    "你一次能看两个方向吗，眼睛各自独立转动",
-    "变色龙的舌头比身体还长，弹出去抓猎物吗",
-    "你动作很慢但精准度很高对吗",
-    "变色龙感觉特别神秘，很想认识你",
-    "你现在是什么颜色，心情好的时候是什么色",
+    "变色龙！变色能力真的很厉害，是根据情绪变色吗 / A chameleon! Changing color is so cool, does it depend on your mood?",
+    "你一次能看两个方向吗，眼睛各自独立转动 / Can you look in two directions at once? Each eye moves on its own?",
+    "变色龙的舌头比身体还长，弹出去抓猎物吗 / Chameleon tongues are longer than their bodies, you shoot it out to catch prey?",
+    "你动作很慢但精准度很高对吗 / You move slowly but with great precision, right?",
+    "变色龙感觉特别神秘，很想认识你 / Chameleons seem so mysterious, I'd love to get to know you",
+    "你现在是什么颜色，心情好的时候是什么色 / What color are you right now? What color are you when you're happy?",
   ],
   // ── General species ──
   狼: [
-    "你是狼的吗，我从小就觉得狼是最酷的种族",
-    "狼都这么好看吗，我有点心跳加速",
-    "据说狼特别忠诚，是真的吗？",
-    "你平时是群居还是独行？狼感觉很神秘",
-    "你的嗥叫一定很好听吧，想听一次",
-    "狼的眼睛颜色一般是什么？你的眼睛一定很特别",
-    "我一直觉得狼是最有魅力的，今天见到你更确定了",
-    "听说狼认准一个就是一辈子，这是真的吗？",
-    "你尾巴蓬松吗？一直很好奇狼尾巴摸起来什么感觉",
-    "狼的领地意识很强吧，那你会保护自己喜欢的人吗？",
+    "你是狼的吗，我从小就觉得狼是最酷的种族 / Are you a wolf? I've always thought wolves were the coolest species",
+    "狼都这么好看吗，我有点心跳加速 / Are all wolves this good-looking? My heart's racing a bit",
+    "据说狼特别忠诚，是真的吗？ / They say wolves are super loyal, is that true?",
+    "你平时是群居还是独行？狼感觉很神秘 / Are you a pack animal or a lone wolf? Wolves seem so mysterious",
+    "你的嗥叫一定很好听吧，想听一次 / Your howl must sound great, I'd love to hear it once",
+    "狼的眼睛颜色一般是什么？你的眼睛一定很特别 / What color are wolf eyes usually? Yours must be special",
+    "我一直觉得狼是最有魅力的，今天见到你更确定了 / I've always thought wolves were the most charming, meeting you made me sure",
+    "听说狼认准一个就是一辈子，这是真的吗？ / I heard wolves mate for life once they choose, is that true?",
+    "你尾巴蓬松吗？一直很好奇狼尾巴摸起来什么感觉 / Is your tail fluffy? I've always wondered what a wolf tail feels like",
+    "狼的领地意识很强吧，那你会保护自己喜欢的人吗？ / Wolves are really territorial, right? Would you protect someone you like?",
   ],
   狐: [
-    "狐真的都这么聪明吗，跟你说话有点紧张",
-    "听说狐特别会撒娇，是真的吗？",
-    "你的耳朵是尖的吧？好想碰一下",
-    "你是红狐还是银狐？还是别的什么颜色？",
-    "狐脑子这么好使，你一定很难追到吧",
-    "你有几条尾巴啊？听说修炼久了会有很多条",
-    "狐都这么漂亮，你一定被搭讪很多次了吧",
-    "我觉得狐天生就有一种神秘感，很吸引我",
-    "你是擅长谋略的那种狐狸吗，还是比较温柔型的？",
-    "听说和狐谈恋爱很刺激，是真的吗？",
+    "狐真的都这么聪明吗，跟你说话有点紧张 / Are all foxes this smart? I'm a little nervous talking to you",
+    "听说狐特别会撒娇，是真的吗？ / I heard foxes are really good at acting cute, true?",
+    "你的耳朵是尖的吧？好想碰一下 / Your ears are pointy, right? I want to touch them",
+    "你是红狐还是银狐？还是别的什么颜色？ / Are you a red fox or a silver fox? Or some other color?",
+    "狐脑子这么好使，你一定很难追到吧 / Foxes are so clever, you must be hard to win over",
+    "你有几条尾巴啊？听说修炼久了会有很多条 / How many tails do you have? I heard you grow more with time",
+    "狐都这么漂亮，你一定被搭讪很多次了吧 / Foxes are all so pretty, you must get hit on a lot",
+    "我觉得狐天生就有一种神秘感，很吸引我 / Foxes have a natural air of mystery that really draws me in",
+    "你是擅长谋略的那种狐狸吗，还是比较温柔型的？ / Are you the scheming kind of fox, or the gentle type?",
+    "听说和狐谈恋爱很刺激，是真的吗？ / I heard dating a fox is thrilling, is that true?",
   ],
   猫: [
-    "猫真的都这么独立吗，我喜欢这种感觉",
-    "你平时是傲娇型的还是黏人型的猫？",
-    "猫的睡眠时间真的很长吗？你喜欢睡懒觉吗",
-    "你有没有不经意间把东西推下桌子的习惯",
-    "猫对喜欢的人会主动吗，还是等对方来找你？",
-    "你的耳朵会根据心情动吗？好想看看生气时的样子",
-    "猫喜欢被摸耳朵吗，还是只允许特别亲近的人",
-    "你是那种高冷外表但其实很粘人的猫吗？",
-    "猫眼睛特别好看，你的是竖瞳还是圆瞳？",
-    "我一直觉得猫最难追，所以今天鼓起勇气打招呼",
+    "猫真的都这么独立吗，我喜欢这种感觉 / Are all cats really this independent? I like that",
+    "你平时是傲娇型的还是黏人型的猫？ / Are you a tsundere cat or a clingy cat?",
+    "猫的睡眠时间真的很长吗？你喜欢睡懒觉吗 / Do cats really sleep that much? Do you like sleeping in?",
+    "你有没有不经意间把东西推下桌子的习惯 / Do you have a habit of casually knocking things off tables?",
+    "猫对喜欢的人会主动吗，还是等对方来找你？ / Do cats make the first move with someone they like, or wait for them?",
+    "你的耳朵会根据心情动吗？好想看看生气时的样子 / Do your ears move with your mood? I want to see them when you're angry",
+    "猫喜欢被摸耳朵吗，还是只允许特别亲近的人 / Do cats like having their ears touched, or only by someone really close?",
+    "你是那种高冷外表但其实很粘人的猫吗？ / Are you the aloof-looking but secretly clingy kind of cat?",
+    "猫眼睛特别好看，你的是竖瞳还是圆瞳？ / Cat eyes are so pretty, are yours slit pupils or round?",
+    "我一直觉得猫最难追，所以今天鼓起勇气打招呼 / I've always thought cats were hardest to win over, so I worked up the courage today",
   ],
   虎: [
-    "虎！我最喜欢虎了，气场很强",
-    "你的花纹是橙黑色的吗，还是白虎？",
-    "虎看起来很厉害，但是内心柔软吗？",
-    "跟虎在一起会很有安全感吧，我喜欢这种感觉",
-    "你平时脾气怎么样？听说虎容易急躁",
-    "你有没有在打盹的时候露出肚皮的习惯",
-    "虎是百兽之王，那你在感情里也是强势的那一方吗？",
-    "我觉得虎特别帅，看到你的档案就直接打招呼了",
-    "你的爪子平时收起来的吗？",
-    "虎力量很大吧，保护喜欢的人一定很有力",
+    "虎！我最喜欢虎了，气场很强 / A tiger! Tigers are my favorite, what an aura",
+    "你的花纹是橙黑色的吗，还是白虎？ / Are your stripes orange and black, or are you a white tiger?",
+    "虎看起来很厉害，但是内心柔软吗？ / Tigers look so fierce, but are you soft inside?",
+    "跟虎在一起会很有安全感吧，我喜欢这种感觉 / Being with a tiger must feel so safe, I like that",
+    "你平时脾气怎么样？听说虎容易急躁 / How's your temper? I heard tigers can be short-tempered",
+    "你有没有在打盹的时候露出肚皮的习惯 / Do you show your belly when you nap?",
+    "虎是百兽之王，那你在感情里也是强势的那一方吗？ / Tigers are kings of the jungle, so are you the dominant one in relationships too?",
+    "我觉得虎特别帅，看到你的档案就直接打招呼了 / Tigers are so handsome, I said hi the moment I saw your profile",
+    "你的爪子平时收起来的吗？ / Do you keep your claws retracted normally?",
+    "虎力量很大吧，保护喜欢的人一定很有力 / Tigers are so strong, you must be great at protecting the one you like",
   ],
   豹: [
-    "豹！速度最快的种族，你跑步一定很厉害",
-    "你是猎豹还是花豹还是雪豹？都好喜欢",
-    "豹的花纹是每只都不一样的吗？",
-    "豹感觉很孤傲，你平时朋友多吗",
-    "你喜欢爬树吗？豹都爱待在高处",
-    "豹反应速度这么快，打游戏一定很厉害",
-    "我觉得豹是最有美感的猫科种族，线条太好看了",
-    "你有没有喜欢独处的倾向？豹感觉很享受独处",
-    "豹眼神很锐利，看到你档案感觉被扫视到了",
-    "雪豹的话，你能适应城市生活吗，还是更喜欢山地",
+    "豹！速度最快的种族，你跑步一定很厉害 / A leopard! The fastest species, you must be a great runner",
+    "你是猎豹还是花豹还是雪豹？都好喜欢 / Are you a cheetah, a leopard, or a snow leopard? I love them all",
+    "豹的花纹是每只都不一样的吗？ / Is every leopard's pattern different?",
+    "豹感觉很孤傲，你平时朋友多吗 / Leopards seem so aloof, do you have many friends?",
+    "你喜欢爬树吗？豹都爱待在高处 / Do you like climbing trees? Leopards love being up high",
+    "豹反应速度这么快，打游戏一定很厉害 / Leopards react so fast, you must be great at games",
+    "我觉得豹是最有美感的猫科种族，线条太好看了 / Leopards are the most beautiful felines, those lines are gorgeous",
+    "你有没有喜欢独处的倾向？豹感觉很享受独处 / Do you tend to like being alone? Leopards seem to enjoy solitude",
+    "豹眼神很锐利，看到你档案感觉被扫视到了 / Leopards have such sharp eyes, I felt scanned just looking at your profile",
+    "雪豹的话，你能适应城市生活吗，还是更喜欢山地 / If you're a snow leopard, can you handle city life, or do you prefer mountains?",
   ],
   狮: [
-    "狮子！我一直很仰慕狮子的气场",
-    "你有鬃毛吗？狮子的鬃毛好好看",
-    "狮子是群居的吧，你有一个大家族吗？",
-    "你平时是那种保护大家的角色吗？感觉很可靠",
-    "我喜欢狮子那种泰然自若的感觉，很有领袖气质",
-    "你懒得动的时候是什么样子的",
-    "狮子会撒娇吗？感觉你们很骄傲",
-    "你是那种睡觉特别能睡的狮子吗",
-    "狮子在感情里是主动还是被动的那一方？",
-    "跟狮子在一起感觉会很有安全感，我很心动",
+    "狮子！我一直很仰慕狮子的气场 / A lion! I've always admired a lion's aura",
+    "你有鬃毛吗？狮子的鬃毛好好看 / Do you have a mane? Lion manes are gorgeous",
+    "狮子是群居的吧，你有一个大家族吗？ / Lions live in prides, right? Do you have a big family?",
+    "你平时是那种保护大家的角色吗？感觉很可靠 / Are you the one who protects everyone? You seem so reliable",
+    "我喜欢狮子那种泰然自若的感觉，很有领袖气质 / I love that calm, composed lion vibe, such a natural leader",
+    "你懒得动的时候是什么样子的 / What do you look like when you're too lazy to move?",
+    "狮子会撒娇吗？感觉你们很骄傲 / Do lions act cute? You all seem so proud",
+    "你是那种睡觉特别能睡的狮子吗 / Are you the kind of lion that can sleep forever?",
+    "狮子在感情里是主动还是被动的那一方？ / Are lions the ones who make the first move in relationships?",
+    "跟狮子在一起感觉会很有安全感，我很心动 / Being with a lion would feel so safe, my heart's fluttering",
   ],
   熊猫: [
-    "熊猫！！太可爱了我直接打招呼",
-    "你真的很喜欢吃竹子吗？还是这个是刻板印象",
-    "熊猫是不是特别受欢迎，你一定收到很多消息吧",
-    "你的眼圈是天生的吗，好特别好好看",
-    "听说熊猫脾气很好而且特别可爱，你是这样的吗",
-    "你平时喜欢赖在地上滚吗",
-    "熊猫好稀少啊，感觉很幸运能看到你的档案",
-    "你是四川的熊猫吗，还是其他地方的",
+    "熊猫！！太可爱了我直接打招呼 / A panda!! Too cute, I had to say hi",
+    "你真的很喜欢吃竹子吗？还是这个是刻板印象 / Do you really love bamboo? Or is that a stereotype?",
+    "熊猫是不是特别受欢迎，你一定收到很多消息吧 / Pandas must be super popular, you must get tons of messages",
+    "你的眼圈是天生的吗，好特别好好看 / Are your eye patches natural? So unique and pretty",
+    "听说熊猫脾气很好而且特别可爱，你是这样的吗 / I heard pandas are good-tempered and super cute, are you like that?",
+    "你平时喜欢赖在地上滚吗 / Do you like rolling around on the floor?",
+    "熊猫好稀少啊，感觉很幸运能看到你的档案 / Pandas are so rare, I feel lucky to see your profile",
+    "你是四川的熊猫吗，还是其他地方的 / Are you a Sichuan panda, or from somewhere else?",
   ],
   熊: [
-    "熊！！感觉超有安全感的",
-    "你平时冬眠吗？还是已经进化到不需要冬眠了",
-    "熊拥抱起来一定很舒服，好想试试",
-    "你是什么熊？棕熊还是黑熊还是北极熊？",
-    "听说熊脾气很好，只要不激怒就很温和，是吗",
-    "你有没有很喜欢蜂蜜的习惯",
-    "熊看起来憨厚但其实很聪明对吗",
-    "我觉得熊是最让人放心的种族之一，想认识你",
-    "你睡觉的时候会蜷缩成一团吗？",
-    "熊力量很大，但是性格温和的话简直完美",
+    "熊！！感觉超有安全感的 / A bear!! You feel so safe",
+    "你平时冬眠吗？还是已经进化到不需要冬眠了 / Do you hibernate? Or have you evolved past that?",
+    "熊拥抱起来一定很舒服，好想试试 / Bear hugs must feel amazing, I want to try",
+    "你是什么熊？棕熊还是黑熊还是北极熊？ / What kind of bear are you? Brown, black, or polar?",
+    "听说熊脾气很好，只要不激怒就很温和，是吗 / I heard bears are gentle as long as you don't provoke them, true?",
+    "你有没有很喜欢蜂蜜的习惯 / Do you have a thing for honey?",
+    "熊看起来憨厚但其实很聪明对吗 / Bears look goofy but are actually really smart, right?",
+    "我觉得熊是最让人放心的种族之一，想认识你 / Bears are one of the most reassuring species, I'd love to meet you",
+    "你睡觉的时候会蜷缩成一团吗？ / Do you curl up into a ball when you sleep?",
+    "熊力量很大，但是性格温和的话简直完美 / Bears are so strong, and if you're gentle too that's just perfect",
   ],
   兔: [
-    "兔子！跑得最快的小型种族对吗",
-    "你的耳朵是竖着的还是垂着的？都好可爱",
-    "兔子害怕的时候会把耳朵压下来吗",
-    "你有没有喜欢不停抖腿的习惯",
-    "兔子视野很广对吗？几乎是360度",
-    "你喜欢吃什么？胡萝卜是刻板印象还是真的爱吃",
-    "兔子都这么可爱，你本人一定更可爱",
-    "听说兔子一紧张就会不停动鼻子，你也这样吗",
-    "兔子的毛一定超级软，好想摸",
-    "你平时活动时间是白天还是晨昏的？",
+    "兔子！跑得最快的小型种族对吗 / A rabbit! The fastest small species, right?",
+    "你的耳朵是竖着的还是垂着的？都好可爱 / Are your ears upright or floppy? Both are so cute",
+    "兔子害怕的时候会把耳朵压下来吗 / Do rabbits flatten their ears when they're scared?",
+    "你有没有喜欢不停抖腿的习惯 / Do you have a habit of constantly bouncing your leg?",
+    "兔子视野很广对吗？几乎是360度 / Rabbits have really wide vision, right? Almost 360 degrees",
+    "你喜欢吃什么？胡萝卜是刻板印象还是真的爱吃 / What do you like to eat? Is the carrot thing a stereotype or real?",
+    "兔子都这么可爱，你本人一定更可爱 / Rabbits are all so cute, you must be even cuter in person",
+    "听说兔子一紧张就会不停动鼻子，你也这样吗 / I heard rabbits twitch their noses nonstop when nervous, do you too?",
+    "兔子的毛一定超级软，好想摸 / Rabbit fur must be super soft, I want to pet it",
+    "你平时活动时间是白天还是晨昏的？ / Are you active during the day, or at dawn and dusk?",
   ],
   鹿: [
-    "鹿！感觉特别温柔的种族",
-    "你有角吗？鹿的角都好好看",
-    "鹿奔跑的时候一定很优雅",
-    "你平时警觉性很高吗？鹿感觉很敏感",
-    "听说鹿眼睛特别大特别漂亮，你也是吗",
-    "鹿在感情里是很纯情的那种吗？",
-    "你的角每年都会换吗，好神奇",
-    "我觉得鹿特别有灵气，遇到你感觉很幸运",
-    "鹿害怕的时候是什么反应，冻住还是逃跑",
-    "你对自己喜欢的人会主动吗，还是等对方追？",
+    "鹿！感觉特别温柔的种族 / A deer! Such a gentle species",
+    "你有角吗？鹿的角都好好看 / Do you have antlers? Deer antlers are so beautiful",
+    "鹿奔跑的时候一定很优雅 / Deer must look so graceful running",
+    "你平时警觉性很高吗？鹿感觉很敏感 / Are you always on alert? Deer seem so sensitive",
+    "听说鹿眼睛特别大特别漂亮，你也是吗 / I heard deer have big, beautiful eyes, do you too?",
+    "鹿在感情里是很纯情的那种吗？ / Are deer the pure, innocent type in love?",
+    "你的角每年都会换吗，好神奇 / Do your antlers grow back every year? So amazing",
+    "我觉得鹿特别有灵气，遇到你感觉很幸运 / Deer have such an ethereal vibe, I feel lucky to meet you",
+    "鹿害怕的时候是什么反应，冻住还是逃跑 / What do deer do when scared, freeze or run?",
+    "你对自己喜欢的人会主动吗，还是等对方追？ / Do you make the first move with someone you like, or wait to be chased?",
   ],
   鸟: [
-    "鸟！会飞的种族我特别羡慕",
-    "你的翅膀展开有多宽？",
-    "飞翔的感觉是什么样的，能描述一下吗",
-    "你是猛禽系的还是鸣禽系的？",
-    "高处看世界一定很壮观，你最高飞过多高",
-    "鸟的眼睛视力超好对吗，能看多远",
-    "你平时喜欢在高处待着吗，比如阳台或者山顶",
-    "你的羽毛是什么颜色的，好想看看",
-    "你会模仿声音吗，还是只会发出自己本来的叫声",
-    "我一直觉得鸟是最自由的种族，很向往你们",
+    "鸟！会飞的种族我特别羡慕 / A bird! I'm so jealous of species that can fly",
+    "你的翅膀展开有多宽？ / How wide is your wingspan?",
+    "飞翔的感觉是什么样的，能描述一下吗 / What does flying feel like? Can you describe it?",
+    "你是猛禽系的还是鸣禽系的？ / Are you a bird of prey or a songbird?",
+    "高处看世界一定很壮观，你最高飞过多高 / The world must look amazing from up high, how high have you flown?",
+    "鸟的眼睛视力超好对吗，能看多远 / Birds have amazing eyesight, right? How far can you see?",
+    "你平时喜欢在高处待着吗，比如阳台或者山顶 / Do you like being up high, like balconies or mountaintops?",
+    "你的羽毛是什么颜色的，好想看看 / What color are your feathers? I'd love to see",
+    "你会模仿声音吗，还是只会发出自己本来的叫声 / Can you mimic sounds, or just make your own call?",
+    "我一直觉得鸟是最自由的种族，很向往你们 / I've always thought birds were the freest species, I envy you",
   ],
   鹰: [
-    "鹰！猛禽里最帅的种族，气场真的很强",
-    "你俯冲的速度有多快？据说猛禽俯冲非常恐怖",
-    "鹰的视力真的可以看很远很远吗",
-    "你爪子的力量很大吧，能抓住什么",
-    "鹰感觉特别孤傲，但是对喜欢的人会温柔吗",
-    "你喜欢在高空翱翔吗，一个人在那么高的地方不孤独吗",
-    "我特别喜欢鹰那种霸气中带着冷静的感觉",
+    "鹰！猛禽里最帅的种族，气场真的很强 / An eagle! The most handsome bird of prey, what an aura",
+    "你俯冲的速度有多快？据说猛禽俯冲非常恐怖 / How fast is your dive? I heard raptor dives are terrifying",
+    "鹰的视力真的可以看很远很远吗 / Can eagles really see super far?",
+    "你爪子的力量很大吧，能抓住什么 / Your talons must be really strong, what can you grab?",
+    "鹰感觉特别孤傲，但是对喜欢的人会温柔吗 / Eagles seem so aloof, but are you gentle with someone you like?",
+    "你喜欢在高空翱翔吗，一个人在那么高的地方不孤独吗 / Do you like soaring up high? Isn't it lonely up there alone?",
+    "我特别喜欢鹰那种霸气中带着冷静的感觉 / I love that eagle vibe, fierce but calm",
   ],
   蛇: [
-    "蛇！感觉神秘又酷，我一直很好奇蛇",
-    "你是冷血的吗，冬天会变得不活泼吗",
-    "蛇的感知能力是靠舌头吗？好神奇",
-    "你有毒吗？如果有的话……算了",
-    "蛇蜕皮的时候是什么感觉",
-    "听说蛇特别有情调，是真的吗",
-    "你平时喜欢盘在温暖的地方吗",
-    "蛇的眼神特别有魔力，感觉你一定也是这样的",
-    "我很喜欢蛇的神秘感，和你聊天一定很有意思",
-    "你是树栖还是地栖的？",
+    "蛇！感觉神秘又酷，我一直很好奇蛇 / A snake! Mysterious and cool, I've always been curious about snakes",
+    "你是冷血的吗，冬天会变得不活泼吗 / Are you cold-blooded? Do you get sluggish in winter?",
+    "蛇的感知能力是靠舌头吗？好神奇 / Do snakes sense things with their tongues? So amazing",
+    "你有毒吗？如果有的话……算了 / Are you venomous? If you are... never mind",
+    "蛇蜕皮的时候是什么感觉 / What does shedding your skin feel like?",
+    "听说蛇特别有情调，是真的吗 / I heard snakes are really romantic, is that true?",
+    "你平时喜欢盘在温暖的地方吗 / Do you like coiling up somewhere warm?",
+    "蛇的眼神特别有魔力，感觉你一定也是这样的 / Snakes have such hypnotic eyes, I bet yours are too",
+    "我很喜欢蛇的神秘感，和你聊天一定很有意思 / I love the mystery of snakes, chatting with you must be fun",
+    "你是树栖还是地栖的？ / Do you live in trees or on the ground?",
   ],
   犬: [
-    "狗！感觉最可靠的种族之一",
-    "你平时会摇尾巴吗，开心的时候",
-    "听说狗嗅觉特别好，你能闻出很多人闻不到的气味吗",
-    "狗在感情里是很专一的那种对吗",
-    "你喜欢户外活动吗？狗感觉精力很旺盛",
-    "你的耳朵是竖耳还是垂耳？两种我都喜欢",
-    "狗对自己喜欢的人是很黏的那种吗",
-    "你遇到喜欢的人会直接说出来吗，还是会拐弯抹角",
-    "狗睡觉会做追梦梦吗，腿会不会抖",
-    "我觉得狗特别真诚，所以第一眼就想打招呼",
+    "狗！感觉最可靠的种族之一 / A dog! One of the most reliable species",
+    "你平时会摇尾巴吗，开心的时候 / Do you wag your tail when you're happy?",
+    "听说狗嗅觉特别好，你能闻出很多人闻不到的气味吗 / I heard dogs have an amazing sense of smell, can you smell things most people can't?",
+    "狗在感情里是很专一的那种对吗 / Dogs are really loyal in love, right?",
+    "你喜欢户外活动吗？狗感觉精力很旺盛 / Do you like outdoor activities? Dogs seem so full of energy",
+    "你的耳朵是竖耳还是垂耳？两种我都喜欢 / Are your ears upright or floppy? I like both",
+    "狗对自己喜欢的人是很黏的那种吗 / Are dogs really clingy with people they like?",
+    "你遇到喜欢的人会直接说出来吗，还是会拐弯抹角 / When you like someone, do you say it straight out or beat around the bush?",
+    "狗睡觉会做追梦梦吗，腿会不会抖 / Do dogs dream about chasing things? Do your legs twitch?",
+    "我觉得狗特别真诚，所以第一眼就想打招呼 / Dogs are so sincere, that's why I wanted to say hi right away",
   ],
   马: [
-    "马！气质好特别，我一直很喜欢马族",
-    "你平时喜欢奔跑吗，还是更享受悠闲的节奏",
-    "马都这么高挑吗，你身高多少",
-    "你的鬃毛是什么颜色的，好想看看",
-    "听说马很通人性，你对人的情绪感知能力强吗",
-    "马在感情里是奔放型的还是保守型的",
-    "你喜欢大草原还是城市生活",
-    "马力量很大，保护起喜欢的人来一定很有力",
-    "我觉得马特别有活力，和你在一起一定不会无聊",
-    "你跑步的时候是四足还是双足？",
+    "马！气质好特别，我一直很喜欢马族 / A horse! Such a unique vibe, I've always loved horses",
+    "你平时喜欢奔跑吗，还是更享受悠闲的节奏 / Do you like galloping, or do you prefer a slow pace?",
+    "马都这么高挑吗，你身高多少 / Are all horses this tall? How tall are you?",
+    "你的鬃毛是什么颜色的，好想看看 / What color is your mane? I'd love to see",
+    "听说马很通人性，你对人的情绪感知能力强吗 / I heard horses really understand people, are you good at reading emotions?",
+    "马在感情里是奔放型的还是保守型的 / Are horses free-spirited or reserved in love?",
+    "你喜欢大草原还是城市生活 / Do you prefer open grasslands or city life?",
+    "马力量很大，保护起喜欢的人来一定很有力 / Horses are so strong, you must be great at protecting the one you like",
+    "我觉得马特别有活力，和你在一起一定不会无聊 / Horses are so full of energy, being with you would never be boring",
+    "你跑步的时候是四足还是双足？ / Do you run on four legs or two?",
   ],
   猪: [
-    "猪！听说猪其实超级聪明的，是真的吗",
-    "你平时喜欢在泥地打滚吗，还是这个是刻板印象",
-    "猪对食物真的很有热情吗，你有什么特别喜欢的",
-    "听说猪嗅觉比狗还灵，是真的吗",
-    "猪感觉很享受生活，你是这种类型吗",
-    "我觉得猪特别真实可爱，想和你认识",
-    "你有小蹄子吗，听说猪的蹄很有意思",
-    "猪智商真的很高，在学业或者工作上很厉害吗",
+    "猪！听说猪其实超级聪明的，是真的吗 / A pig! I heard pigs are actually super smart, is that true?",
+    "你平时喜欢在泥地打滚吗，还是这个是刻板印象 / Do you like rolling in the mud, or is that a stereotype?",
+    "猪对食物真的很有热情吗，你有什么特别喜欢的 / Are pigs really that passionate about food? Any favorites?",
+    "听说猪嗅觉比狗还灵，是真的吗 / I heard pigs have a better nose than dogs, is that true?",
+    "猪感觉很享受生活，你是这种类型吗 / Pigs seem to really enjoy life, are you that type?",
+    "我觉得猪特别真实可爱，想和你认识 / Pigs are so genuine and cute, I'd love to get to know you",
+    "你有小蹄子吗，听说猪的蹄很有意思 / Do you have little hooves? I heard pig hooves are interesting",
+    "猪智商真的很高，在学业或者工作上很厉害吗 / Pigs are really smart, are you great at school or work?",
   ],
   浣熊: [
-    "浣熊！超可爱的种族，你有没有洗东西的习惯",
-    "浣熊的眼圈是天生的吗，好特别",
-    "你有没有把食物拿去水里洗一洗再吃的习惯",
-    "浣熊感觉特别机灵，一定很聪明",
-    "你平时是昼行性还是夜行性的",
-    "浣熊的爪子很灵巧对吗，手工能力一定很强",
-    "我觉得浣熊特别有个性，看到你就想认识",
-    "你背上的条纹尾巴是真的还是造型",
+    "浣熊！超可爱的种族，你有没有洗东西的习惯 / A raccoon! Such a cute species, do you have a habit of washing things?",
+    "浣熊的眼圈是天生的吗，好特别 / Is your eye mask natural? So unique",
+    "你有没有把食物拿去水里洗一洗再吃的习惯 / Do you wash your food in water before eating it?",
+    "浣熊感觉特别机灵，一定很聪明 / Raccoons seem so clever, you must be really smart",
+    "你平时是昼行性还是夜行性的 / Are you diurnal or nocturnal?",
+    "浣熊的爪子很灵巧对吗，手工能力一定很强 / Raccoon paws are really nimble, right? You must be great at crafts",
+    "我觉得浣熊特别有个性，看到你就想认识 / Raccoons have so much personality, I wanted to meet you right away",
+    "你背上的条纹尾巴是真的还是造型 / Is your ringed tail real or styled?",
   ],
   水獭: [
-    "水獭！最可爱的种族之一，我直接就打招呼了",
-    "你会游泳吗，水獭天生就会吧",
-    "水獭的毛摸起来是什么感觉，防水的吗",
-    "你平时喜欢待在水边吗",
-    "听说水獭喜欢把喜欢的东西放在肚子上，你有这个习惯吗",
-    "水獭手牵手睡觉是真的吗，好想",
-    "你喜欢吃鱼吗？水獭应该都很爱吧",
-    "我觉得水獭是最治愈的种族，想认识你",
+    "水獭！最可爱的种族之一，我直接就打招呼了 / An otter! One of the cutest species, I said hi immediately",
+    "你会游泳吗，水獭天生就会吧 / Can you swim? Otters are born knowing how, right?",
+    "水獭的毛摸起来是什么感觉，防水的吗 / What does otter fur feel like? Is it waterproof?",
+    "你平时喜欢待在水边吗 / Do you like hanging out by the water?",
+    "听说水獭喜欢把喜欢的东西放在肚子上，你有这个习惯吗 / I heard otters keep their favorite things on their bellies, do you?",
+    "水獭手牵手睡觉是真的吗，好想 / Is it true otters hold hands while sleeping? I want that",
+    "你喜欢吃鱼吗？水獭应该都很爱吧 / Do you like fish? All otters must love it",
+    "我觉得水獭是最治愈的种族，想认识你 / Otters are the most healing species, I'd love to get to know you",
   ],
   狸: [
-    "狸！感觉好神秘，你是什么狸",
-    "狸有没有变化的能力，传说里狸猫很厉害",
-    "你的肚皮是圆圆的吗，好想摸",
-    "狸是夜行性的吗，你喜欢晚上活动吗",
-    "听说狸特别擅长伪装，你平时给人什么印象",
-    "你是日本狸还是其他地方的",
-    "我觉得狸很有趣，今天鼓起勇气打招呼",
+    "狸！感觉好神秘，你是什么狸 / A tanuki! So mysterious, what kind are you?",
+    "狸有没有变化的能力，传说里狸猫很厉害 / Can tanuki shapeshift? They're so powerful in legends",
+    "你的肚皮是圆圆的吗，好想摸 / Is your belly round? I want to pat it",
+    "狸是夜行性的吗，你喜欢晚上活动吗 / Are tanuki nocturnal? Do you like going out at night?",
+    "听说狸特别擅长伪装，你平时给人什么印象 / I heard tanuki are masters of disguise, what impression do you give people?",
+    "你是日本狸还是其他地方的 / Are you a Japanese tanuki or from somewhere else?",
+    "我觉得狸很有趣，今天鼓起勇气打招呼 / Tanuki are so interesting, I worked up the courage to say hi today",
   ],
   鱼: [
-    "鱼！水里的种族，你平时怎么上岸活动",
-    "你能在陆地待多久，会不会不舒服",
-    "鱼的鳞片是什么颜色的",
-    "鱼的记忆力真的只有七秒吗，这肯定是假的吧",
-    "你在水里还是陆地上更自在",
-    "我很好奇鱼的日常生活，想多了解你",
-    "鱼的尾鳍展开一定很漂亮",
-    "鲨鱼的话，你游泳的速度很快吧",
+    "鱼！水里的种族，你平时怎么上岸活动 / A fish! A water species, how do you get around on land?",
+    "你能在陆地待多久，会不会不舒服 / How long can you stay on land? Is it uncomfortable?",
+    "鱼的鳞片是什么颜色的 / What color are your scales?",
+    "鱼的记忆力真的只有七秒吗，这肯定是假的吧 / Do fish really have a seven-second memory? That has to be fake",
+    "你在水里还是陆地上更自在 / Are you more comfortable in water or on land?",
+    "我很好奇鱼的日常生活，想多了解你 / I'm so curious about a fish's daily life, I want to know more about you",
+    "鱼的尾鳍展开一定很漂亮 / Your tail fin must look beautiful spread out",
+    "鲨鱼的话，你游泳的速度很快吧 / If you're a shark, you must swim really fast",
   ],
   // ── Additional species ──
   猴: [
-    "猴！感觉特别活泼好动的种族",
-    "你爬树很厉害吧，尾巴可以卷东西吗",
-    "猴感觉特别聪明，你在生活里很会变通吗",
-    "你平时是群居的吗，猴感觉很爱热闹",
-    "猴的好奇心很强吧，什么都想试试",
-    "感觉猴很有意思，想认识你",
+    "猴！感觉特别活泼好动的种族 / A monkey! Such a lively, active species",
+    "你爬树很厉害吧，尾巴可以卷东西吗 / You must be great at climbing, can your tail grab things?",
+    "猴感觉特别聪明，你在生活里很会变通吗 / Monkeys seem so smart, are you good at adapting in life?",
+    "你平时是群居的吗，猴感觉很爱热闹 / Do you live in a group? Monkeys seem to love company",
+    "猴的好奇心很强吧，什么都想试试 / Monkeys are so curious, you must want to try everything",
+    "感觉猴很有意思，想认识你 / Monkeys seem so fun, I'd love to get to know you",
   ],
   猩猩: [
-    "猩猩！感觉最有智慧的灵长类之一",
-    "你会使用工具吗，猩猩这方面很厉害",
-    "你的臂展很长吗，猩猩感觉臂力很强",
-    "猩猩智商很高，你平时有什么兴趣爱好",
-    "你喜欢独处吗，感觉猩猩比较安静沉稳",
-    "认识猩猩感觉很有趣，想和你多聊聊",
+    "猩猩！感觉最有智慧的灵长类之一 / An ape! One of the wisest primates",
+    "你会使用工具吗，猩猩这方面很厉害 / Can you use tools? Apes are great at that",
+    "你的臂展很长吗，猩猩感觉臂力很强 / Is your arm span long? Apes seem so strong",
+    "猩猩智商很高，你平时有什么兴趣爱好 / Apes are really smart, what are your hobbies?",
+    "你喜欢独处吗，感觉猩猩比较安静沉稳 / Do you like being alone? Apes seem quiet and steady",
+    "认识猩猩感觉很有趣，想和你多聊聊 / Meeting an ape is so interesting, I'd love to chat more",
   ],
   鼠: [
-    "鼠！感觉特别机灵的种族",
-    "你的胡须很灵敏吗，能感知周围环境",
-    "鼠记忆力和解决问题的能力都很强对吗",
-    "你平时是夜行性的吗，白天睡觉",
-    "鼠感觉特别适应力强，哪里都能生活",
-    "和鼠相处感觉会很有趣，想认识你",
+    "鼠！感觉特别机灵的种族 / A rat! Such a clever species",
+    "你的胡须很灵敏吗，能感知周围环境 / Are your whiskers really sensitive? Can you sense your surroundings?",
+    "鼠记忆力和解决问题的能力都很强对吗 / Rats have great memory and problem-solving skills, right?",
+    "你平时是夜行性的吗，白天睡觉 / Are you nocturnal? Sleep during the day?",
+    "鼠感觉特别适应力强，哪里都能生活 / Rats are so adaptable, you can live anywhere",
+    "和鼠相处感觉会很有趣，想认识你 / Hanging out with a rat would be so fun, I'd love to meet you",
   ],
   豚鼠: [
-    "豚鼠！感觉圆滚滚超可爱的种族",
-    "你高兴的时候会蹦跶吗，那个动作好可爱",
-    "豚鼠喜欢发出什么声音，那种咕噜声吗",
-    "你的毛是什么颜色的，好想看看",
-    "豚鼠感觉特别亲人，很好接触吗",
-    "见到豚鼠感觉很开心，今天打招呼了",
+    "豚鼠！感觉圆滚滚超可爱的种族 / A guinea pig! Such a round, adorable species",
+    "你高兴的时候会蹦跶吗，那个动作好可爱 / Do you popcorn when you're happy? That's so cute",
+    "豚鼠喜欢发出什么声音，那种咕噜声吗 / What sounds do guinea pigs make? That purring kind?",
+    "你的毛是什么颜色的，好想看看 / What color is your fur? I'd love to see",
+    "豚鼠感觉特别亲人，很好接触吗 / Guinea pigs seem so friendly, are you easy to approach?",
+    "见到豚鼠感觉很开心，今天打招呼了 / Seeing a guinea pig made me so happy, so I said hi today",
   ],
   海豚: [
-    "海豚！感觉最聪明的海洋种族",
-    "你能用回声定位吗，感觉好神奇",
-    "海豚智商很高，你平时喜欢什么类型的挑战",
-    "你会跳出水面吗，那个动作一定很帅",
-    "海豚感觉特别爱玩，你是活泼型的吗",
-    "我一直觉得海豚是最友善的种族之一，很心动",
+    "海豚！感觉最聪明的海洋种族 / A dolphin! The smartest ocean species",
+    "你能用回声定位吗，感觉好神奇 / Can you use echolocation? That's so amazing",
+    "海豚智商很高，你平时喜欢什么类型的挑战 / Dolphins are really smart, what kind of challenges do you like?",
+    "你会跳出水面吗，那个动作一定很帅 / Do you leap out of the water? That must look so cool",
+    "海豚感觉特别爱玩，你是活泼型的吗 / Dolphins seem so playful, are you the lively type?",
+    "我一直觉得海豚是最友善的种族之一，很心动 / I've always thought dolphins were one of the friendliest species, my heart's fluttering",
   ],
   鲸: [
-    "鲸！海洋里最庞大的存在，气场很特别",
-    "你的歌声是那种在海里传很远的低鸣吗",
-    "鲸感觉特别深沉，内心世界一定很丰富",
-    "你喜欢深海还是浅海，鲸感觉偏爱深处",
-    "遇到鲸感觉很特别，今天鼓起勇气打招呼了",
+    "鲸！海洋里最庞大的存在，气场很特别 / A whale! The biggest thing in the ocean, such a special aura",
+    "你的歌声是那种在海里传很远的低鸣吗 / Is your song that low hum that travels far through the sea?",
+    "鲸感觉特别深沉，内心世界一定很丰富 / Whales seem so deep, your inner world must be so rich",
+    "你喜欢深海还是浅海，鲸感觉偏爱深处 / Do you prefer the deep sea or shallow water? Whales seem to love the depths",
+    "遇到鲸感觉很特别，今天鼓起勇气打招呼了 / Meeting a whale feels so special, I worked up the courage to say hi today",
   ],
   海豹: [
-    "海豹！感觉圆滚滚很可爱的种族",
-    "你在水里很灵活，但在陆地上是扭动前进吗",
-    "海豹的眼睛特别大特别圆对吗，好好看",
-    "你喜欢晒太阳吗，感觉海豹都爱趴在礁石上",
-    "你有大胡子吗，感觉很有特点",
-    "海豹感觉特别可爱，见到你档案很开心",
+    "海豹！感觉圆滚滚很可爱的种族 / A seal! Such a round, cute species",
+    "你在水里很灵活，但在陆地上是扭动前进吗 / You're so agile in water, but do you wiggle along on land?",
+    "海豹的眼睛特别大特别圆对吗，好好看 / Seal eyes are so big and round, right? So pretty",
+    "你喜欢晒太阳吗，感觉海豹都爱趴在礁石上 / Do you like sunbathing? Seals all seem to love lying on rocks",
+    "你有大胡子吗，感觉很有特点 / Do you have big whiskers? Very distinctive",
+    "海豹感觉特别可爱，见到你档案很开心 / Seals are so cute, I was so happy to see your profile",
   ],
   考拉: [
-    "考拉！感觉睡眠时间最长的种族，你也爱睡吗",
-    "你真的只吃桉树叶吗，会不会吃腻",
-    "考拉的鼻子是扁扁大大的吗，好特别",
-    "你平时睡多久，一天能睡二十多小时吗",
-    "考拉感觉特别慢节奏，你喜欢安静的生活吗",
-    "见到考拉感觉很幸运，今天打招呼了",
+    "考拉！感觉睡眠时间最长的种族，你也爱睡吗 / A koala! The species that sleeps the most, do you love sleeping too?",
+    "你真的只吃桉树叶吗，会不会吃腻 / Do you really only eat eucalyptus? Don't you get sick of it?",
+    "考拉的鼻子是扁扁大大的吗，好特别 / Is a koala's nose big and flat? So unique",
+    "你平时睡多久，一天能睡二十多小时吗 / How long do you sleep? Can you sleep 20-plus hours a day?",
+    "考拉感觉特别慢节奏，你喜欢安静的生活吗 / Koalas seem so slow-paced, do you like a quiet life?",
+    "见到考拉感觉很幸运，今天打招呼了 / I feel lucky to meet a koala, so I said hi today",
   ],
   蝙蝠: [
-    "蝙蝠！唯一会飞的哺乳类，很特别",
-    "你用回声定位导航吗，感觉好神奇",
-    "蝙蝠倒挂着睡觉吗，不会头晕吗",
-    "你是夜行性的吗，白天不太活动",
-    "蝙蝠感觉很神秘，想多了解你",
-    "你的翅膀展开有多大，飞起来是什么感觉",
+    "蝙蝠！唯一会飞的哺乳类，很特别 / A bat! The only flying mammal, so special",
+    "你用回声定位导航吗，感觉好神奇 / Do you navigate by echolocation? That's so amazing",
+    "蝙蝠倒挂着睡觉吗，不会头晕吗 / Do bats sleep upside down? Don't you get dizzy?",
+    "你是夜行性的吗，白天不太活动 / Are you nocturnal? Not very active during the day?",
+    "蝙蝠感觉很神秘，想多了解你 / Bats seem so mysterious, I want to know more about you",
+    "你的翅膀展开有多大，飞起来是什么感觉 / How big is your wingspan? What does flying feel like?",
   ],
   刺猬: [
-    "刺猬！感觉特别有个性的小型种族",
-    "你的刺平时是收着还是竖着的",
-    "刺猬遇到危险会缩成一团吗，好想看看",
-    "你是夜行性的吗，晚上特别活跃",
-    "刺猬感觉特别可爱，虽然有刺但眼神很温柔",
-    "你喜欢被摸吗，那怎么摸才不会被扎到",
+    "刺猬！感觉特别有个性的小型种族 / A hedgehog! Such a quirky little species",
+    "你的刺平时是收着还是竖着的 / Are your spines usually flat or standing up?",
+    "刺猬遇到危险会缩成一团吗，好想看看 / Do hedgehogs curl into a ball when in danger? I want to see",
+    "你是夜行性的吗，晚上特别活跃 / Are you nocturnal? Extra active at night?",
+    "刺猬感觉特别可爱，虽然有刺但眼神很温柔 / Hedgehogs are so cute, spiky but with such gentle eyes",
+    "你喜欢被摸吗，那怎么摸才不会被扎到 / Do you like being petted? How do I pet you without getting poked?",
   ],
   臭鼬: [
-    "臭鼬！感觉特别有个性，谁都不敢惹你们",
-    "你真的会喷液体吗，哪种情况下才会用",
-    "臭鼬的花纹是黑白条纹吗，好特别",
-    "听说臭鼬其实很温和，是真的吗",
-    "你平时害怕什么，感觉没有天敌的感觉",
-    "臭鼬感觉很有自信，我喜欢这种感觉",
+    "臭鼬！感觉特别有个性，谁都不敢惹你们 / A skunk! So much personality, nobody dares mess with you",
+    "你真的会喷液体吗，哪种情况下才会用 / Do you really spray? In what situations?",
+    "臭鼬的花纹是黑白条纹吗，好特别 / Are skunk stripes black and white? So unique",
+    "听说臭鼬其实很温和，是真的吗 / I heard skunks are actually really gentle, is that true?",
+    "你平时害怕什么，感觉没有天敌的感觉 / What are you afraid of? It feels like you have no natural enemies",
+    "臭鼬感觉很有自信，我喜欢这种感觉 / Skunks seem so confident, I like that",
   ],
   树懒: [
-    "树懒！感觉最放松的种族，很羡慕你们",
-    "你真的动作很慢吗，不着急不焦虑的感觉",
-    "树懒挂在树上睡觉吗，不会掉下来吗",
-    "你一天睡多久，感觉很享受生活",
-    "树懒感觉特别治愈，想和你在一起放松一下",
-    "你的爪子很长吗，用来抓树枝的那种",
+    "树懒！感觉最放松的种族，很羡慕你们 / A sloth! The most relaxed species, I envy you",
+    "你真的动作很慢吗，不着急不焦虑的感觉 / Do you really move that slowly? No rush, no anxiety?",
+    "树懒挂在树上睡觉吗，不会掉下来吗 / Do sloths sleep hanging from trees? Don't you fall?",
+    "你一天睡多久，感觉很享受生活 / How long do you sleep a day? You seem to really enjoy life",
+    "树懒感觉特别治愈，想和你在一起放松一下 / Sloths are so healing, I'd love to just relax with you",
+    "你的爪子很长吗，用来抓树枝的那种 / Are your claws long? The kind for gripping branches?",
   ],
   雪貂: [
-    "雪貂！感觉特别活泼的小型肉食动物",
-    "你是那种精力很旺盛然后突然睡着的类型吗",
-    "雪貂身体很细长对吗，钻洞很厉害",
-    "你喜欢玩耍吗，感觉雪貂特别爱玩",
-    "你的毛是什么颜色的，白的还是棕的还是其他",
-    "感觉雪貂特别有趣，想认识你",
+    "雪貂！感觉特别活泼的小型肉食动物 / A ferret! Such a lively little carnivore",
+    "你是那种精力很旺盛然后突然睡着的类型吗 / Are you the type with tons of energy who suddenly falls asleep?",
+    "雪貂身体很细长对吗，钻洞很厉害 / Ferrets are long and slim, right? Great at squeezing into burrows",
+    "你喜欢玩耍吗，感觉雪貂特别爱玩 / Do you like playing? Ferrets seem to love it",
+    "你的毛是什么颜色的，白的还是棕的还是其他 / What color is your fur, white, brown, or something else?",
+    "感觉雪貂特别有趣，想认识你 / Ferrets seem so fun, I'd love to get to know you",
   ],
   蜜獾: [
-    "蜜獾！听说无所畏惧的种族，是真的吗",
-    "你真的什么都不怕吗，就算对上更大的动物",
-    "蜜獾皮很厚对吗，一般攻击伤不到你们",
-    "你喜欢吃蜂蜜吗，为什么叫蜜獾",
-    "感觉蜜獾特别有勇气，我很欣赏",
-    "你在感情里也是这么勇敢无畏吗",
+    "蜜獾！听说无所畏惧的种族，是真的吗 / A honey badger! I heard you're the fearless species, is it true?",
+    "你真的什么都不怕吗，就算对上更大的动物 / Are you really not afraid of anything, even bigger animals?",
+    "蜜獾皮很厚对吗，一般攻击伤不到你们 / Honey badger skin is super thick, right? Most attacks can't hurt you",
+    "你喜欢吃蜂蜜吗，为什么叫蜜獾 / Do you like honey? Is that why you're called a honey badger?",
+    "感觉蜜獾特别有勇气，我很欣赏 / Honey badgers are so brave, I really admire that",
+    "你在感情里也是这么勇敢无畏吗 / Are you this fearless in love too?",
   ],
   海獭: [
-    "海獭！最可爱的海洋种族，我直接就打招呼了",
-    "你会把食物放在肚子上吃吗，想看看这个",
-    "海獭手牵手睡觉是真的吗，好想",
-    "你的毛防水吗，能浮在水面上吗",
-    "海獭喜欢吃贝类吗，用石头砸开的那种",
-    "我觉得海獭是最治愈的种族之一，想认识你",
+    "海獭！最可爱的海洋种族，我直接就打招呼了 / A sea otter! The cutest ocean species, I said hi immediately",
+    "你会把食物放在肚子上吃吗，想看看这个 / Do you eat food off your belly? I'd love to see that",
+    "海獭手牵手睡觉是真的吗，好想 / Is it true sea otters hold hands while sleeping? I want that",
+    "你的毛防水吗，能浮在水面上吗 / Is your fur waterproof? Can you float on the surface?",
+    "海獭喜欢吃贝类吗，用石头砸开的那种 / Do sea otters like shellfish? The kind you crack open with a rock?",
+    "我觉得海獭是最治愈的种族之一，想认识你 / Sea otters are one of the most healing species, I'd love to meet you",
   ],
   鬣狗: [
-    "鬣狗！感觉很有团队精神的种族",
-    "听说鬣狗社会里雌性更强势，你是这样吗",
-    "你们的叫声是那种笑声一样的吗，好特别",
-    "鬣狗的咬合力很大对吗，很厉害",
-    "你平时是群居的，有固定的族群吗",
-    "感觉鬣狗被误解很多，你实际上是什么性格",
+    "鬣狗！感觉很有团队精神的种族 / A hyena! Such a team-spirited species",
+    "听说鬣狗社会里雌性更强势，你是这样吗 / I heard females are in charge in hyena society, is that you?",
+    "你们的叫声是那种笑声一样的吗，好特别 / Is your call that laughing sound? So unique",
+    "鬣狗的咬合力很大对吗，很厉害 / Hyenas have a super strong bite, right? Impressive",
+    "你平时是群居的，有固定的族群吗 / Do you live in a clan? A regular group?",
+    "感觉鬣狗被误解很多，你实际上是什么性格 / Hyenas get misunderstood a lot, what's your personality really like?",
   ],
   大象: [
-    "大象！感觉最有智慧的陆地种族",
-    "大象记忆力真的很好吗，不会忘事吗",
-    "你的鼻子很灵活吗，能做很多事情",
-    "大象感情很丰富，你是很重感情的那种吗",
-    "大象感觉特别可靠，很想认识你",
-    "你有象牙吗，还是你们的亚种没有",
+    "大象！感觉最有智慧的陆地种族 / An elephant! The wisest land species",
+    "大象记忆力真的很好吗，不会忘事吗 / Do elephants really have amazing memories? Never forget anything?",
+    "你的鼻子很灵活吗，能做很多事情 / Is your trunk really nimble? You can do so much with it",
+    "大象感情很丰富，你是很重感情的那种吗 / Elephants are so emotional, are you the deeply sentimental type?",
+    "大象感觉特别可靠，很想认识你 / Elephants seem so reliable, I'd love to get to know you",
+    "你有象牙吗，还是你们的亚种没有 / Do you have tusks, or does your subspecies not?",
   ],
   犀牛: [
-    "犀牛！感觉特别有存在感的种族",
-    "你的角是真的角质的吗，很硬吧",
-    "犀牛皮肤很厚实对吗，不怕一般伤害",
-    "你视力不好但嗅觉很灵吗，听说是这样",
-    "犀牛感觉外表强硬但内心很温和吗",
-    "今天鼓起勇气打招呼，感觉犀牛很特别",
+    "犀牛！感觉特别有存在感的种族 / A rhino! Such a commanding presence",
+    "你的角是真的角质的吗，很硬吧 / Is your horn really made of keratin? Must be hard",
+    "犀牛皮肤很厚实对吗，不怕一般伤害 / Rhino skin is really thick, right? Not afraid of normal injuries?",
+    "你视力不好但嗅觉很灵吗，听说是这样 / Bad eyesight but a great nose, right? That's what I heard",
+    "犀牛感觉外表强硬但内心很温和吗 / Do rhinos look tough on the outside but gentle inside?",
+    "今天鼓起勇气打招呼，感觉犀牛很特别 / Worked up the courage to say hi today, rhinos seem so special",
   ],
   河马: [
-    "河马！水里最危险的种族之一，感觉很厉害",
-    "你在水里的时间多还是陆地多",
-    "河马皮肤会分泌红色液体吗，那个是防晒的吗",
-    "你的嘴巴张开很大吗，感觉力量很强",
-    "河马感觉外表憨厚，实际上非常有力量",
-    "遇到河马很难得，打招呼看看",
+    "河马！水里最危险的种族之一，感觉很厉害 / A hippo! One of the most dangerous species in the water, impressive",
+    "你在水里的时间多还是陆地多 / Do you spend more time in water or on land?",
+    "河马皮肤会分泌红色液体吗，那个是防晒的吗 / Does hippo skin ooze red liquid? Is that sunscreen?",
+    "你的嘴巴张开很大吗，感觉力量很强 / Can you open your mouth really wide? Seems so powerful",
+    "河马感觉外表憨厚，实际上非常有力量 / Hippos look goofy but are actually incredibly strong",
+    "遇到河马很难得，打招呼看看 / Meeting a hippo is rare, figured I'd say hi",
   ],
   骆驼: [
-    "骆驼！感觉最耐旱的种族，很厉害",
-    "你的驼峰里装的是脂肪不是水对吗，真的",
-    "骆驼踩沙漠很稳，蹄子很宽大吗",
-    "你脾气怎么样，骆驼感觉很有个性",
-    "骆驼眼睫毛很长对吗，好特别",
-    "感觉骆驼特别耐力强，你在生活里也是坚韧型的吗",
+    "骆驼！感觉最耐旱的种族，很厉害 / A camel! The most drought-proof species, amazing",
+    "你的驼峰里装的是脂肪不是水对吗，真的 / Your humps store fat, not water, right? Really?",
+    "骆驼踩沙漠很稳，蹄子很宽大吗 / Camels walk so steadily on sand, are your hooves really wide?",
+    "你脾气怎么样，骆驼感觉很有个性 / How's your temper? Camels seem to have a lot of attitude",
+    "骆驼眼睫毛很长对吗，好特别 / Camels have really long eyelashes, right? So unique",
+    "感觉骆驼特别耐力强，你在生活里也是坚韧型的吗 / Camels have so much stamina, are you the resilient type in life too?",
   ],
   斑马: [
-    "斑马！条纹是每只都不一样的吗，好特别",
-    "你的条纹是黑底白纹还是白底黑纹，这个问题我想了很久",
-    "斑马奔跑速度很快吗，能逃脱天敌",
-    "你是群居的吗，斑马感觉很有团队意识",
-    "我觉得斑马很有辨识度，见到你就记住了",
-    "你和马有来往吗，感觉你们是近亲",
+    "斑马！条纹是每只都不一样的吗，好特别 / A zebra! Is every zebra's stripe pattern different? So unique",
+    "你的条纹是黑底白纹还是白底黑纹，这个问题我想了很久 / Are your stripes white on black or black on white? I've wondered about this forever",
+    "斑马奔跑速度很快吗，能逃脱天敌 / Can zebras run really fast? Fast enough to escape predators?",
+    "你是群居的吗，斑马感觉很有团队意识 / Do you live in a herd? Zebras seem like team players",
+    "我觉得斑马很有辨识度，见到你就记住了 / Zebras are so recognizable, I remembered you the moment I saw you",
+    "你和马有来往吗，感觉你们是近亲 / Do you hang out with horses? You're close relatives, right?",
   ],
   绵羊: [
-    "绵羊！感觉毛最蓬松的种族，摸起来软吗",
-    "你的毛会定期剃掉吗，那个过程是什么感觉",
-    "绵羊感觉特别温和，你平时脾气很好吗",
-    "你有犄角吗，绵羊有的有有的没有",
-    "感觉绵羊很舒适，在一起一定很放松",
-    "你是那种喜欢跟着群体还是喜欢独处的",
+    "绵羊！感觉毛最蓬松的种族，摸起来软吗 / A sheep! The fluffiest species, is your wool soft?",
+    "你的毛会定期剃掉吗，那个过程是什么感觉 / Do you get sheared regularly? What's that like?",
+    "绵羊感觉特别温和，你平时脾气很好吗 / Sheep seem so gentle, are you usually good-tempered?",
+    "你有犄角吗，绵羊有的有有的没有 / Do you have horns? Some sheep do, some don't",
+    "感觉绵羊很舒适，在一起一定很放松 / Sheep seem so cozy, being together must be so relaxing",
+    "你是那种喜欢跟着群体还是喜欢独处的 / Do you like following the flock, or being on your own?",
   ],
   山羊: [
-    "山羊！爬山高手，什么样的斜坡都能爬吗",
-    "你的胡子是白的吗，感觉山羊有胡子",
-    "山羊眼睛是方形瞳孔对吗，好神奇",
-    "你真的什么都能吃吗，山羊很不挑食",
-    "你有犄角吗，山羊的角感觉很有气势",
-    "山羊感觉很有个性，想认识你",
+    "山羊！爬山高手，什么样的斜坡都能爬吗 / A goat! Master climber, can you handle any slope?",
+    "你的胡子是白的吗，感觉山羊有胡子 / Is your beard white? Goats seem to have beards",
+    "山羊眼睛是方形瞳孔对吗，好神奇 / Goats have rectangular pupils, right? So amazing",
+    "你真的什么都能吃吗，山羊很不挑食 / Can you really eat anything? Goats aren't picky at all",
+    "你有犄角吗，山羊的角感觉很有气势 / Do you have horns? Goat horns look so impressive",
+    "山羊感觉很有个性，想认识你 / Goats have so much personality, I'd love to get to know you",
   ],
   孔雀: [
-    "孔雀！感觉最华丽的鸟类，见到你很惊喜",
-    "你的尾羽展开有多大，一定很壮观",
-    "孔雀会主动展示自己吗，感觉很自信",
-    "你的羽毛颜色是什么，蓝的绿的还是白的",
-    "孔雀感觉特别有气质，想和你聊聊",
-    "你平时低调还是喜欢展示，孔雀感觉很特别",
+    "孔雀！感觉最华丽的鸟类，见到你很惊喜 / A peacock! The most dazzling bird, what a nice surprise",
+    "你的尾羽展开有多大，一定很壮观 / How big is your tail fan? It must be spectacular",
+    "孔雀会主动展示自己吗，感觉很自信 / Do peacocks show off on their own? You seem so confident",
+    "你的羽毛颜色是什么，蓝的绿的还是白的 / What color are your feathers, blue, green, or white?",
+    "孔雀感觉特别有气质，想和你聊聊 / Peacocks have such elegance, I'd love to chat",
+    "你平时低调还是喜欢展示，孔雀感觉很特别 / Are you low-key or do you like to show off? Peacocks are so special",
   ],
   鹦鹉: [
-    "鹦鹉！会说话的种族，你能学多少词",
-    "你记忆力很好吗，能记住很多内容",
-    "鹦鹉感觉特别聪明，会解决复杂问题",
-    "你的羽毛是什么颜色的，好想看看",
-    "鹦鹉寿命很长对吗，感觉很有阅历",
-    "和鹦鹉聊天一定很有趣，想试试",
+    "鹦鹉！会说话的种族，你能学多少词 / A parrot! The talking species, how many words can you learn?",
+    "你记忆力很好吗，能记住很多内容 / Is your memory really good? Can you remember lots of things?",
+    "鹦鹉感觉特别聪明，会解决复杂问题 / Parrots seem so smart, great at solving complex problems",
+    "你的羽毛是什么颜色的，好想看看 / What color are your feathers? I'd love to see",
+    "鹦鹉寿命很长对吗，感觉很有阅历 / Parrots live really long, right? You must have seen a lot",
+    "和鹦鹉聊天一定很有趣，想试试 / Chatting with a parrot must be so fun, I want to try",
   ],
   天鹅: [
-    "天鹅！感觉最优雅的鸟类，气质很特别",
-    "你游泳的时候脖子弯成弧线吗，好优美",
-    "天鹅是一夫一妻制的吗，感情很专一",
-    "你飞翔的时候翅膀声很大吗",
-    "天鹅感觉特别高洁，今天鼓起勇气打招呼",
-    "你在感情里是很忠诚的那种吗",
+    "天鹅！感觉最优雅的鸟类，气质很特别 / A swan! The most elegant bird, such a special aura",
+    "你游泳的时候脖子弯成弧线吗，好优美 / Does your neck curve into an arc when you swim? So graceful",
+    "天鹅是一夫一妻制的吗，感情很专一 / Are swans monogamous? So devoted",
+    "你飞翔的时候翅膀声很大吗 / Are your wings loud when you fly?",
+    "天鹅感觉特别高洁，今天鼓起勇气打招呼 / Swans seem so pure and noble, I worked up the courage to say hi today",
+    "你在感情里是很忠诚的那种吗 / Are you the really loyal type in relationships?",
   ],
   火烈鸟: [
-    "火烈鸟！颜色最鲜艳的鸟类，好漂亮",
-    "你的颜色是吃东西吃出来的吗，越吃越粉",
-    "火烈鸟单腿站立是为了保暖吗",
-    "你的弯嘴是用来过滤食物的吗，好聪明的设计",
-    "火烈鸟感觉特别独特，遇到你很开心",
-    "你平时是群居的吗，火烈鸟感觉都是大群的",
+    "火烈鸟！颜色最鲜艳的鸟类，好漂亮 / A flamingo! The most vibrant bird, so pretty",
+    "你的颜色是吃东西吃出来的吗，越吃越粉 / Does your color come from what you eat? The more you eat, the pinker?",
+    "火烈鸟单腿站立是为了保暖吗 / Do flamingos stand on one leg to stay warm?",
+    "你的弯嘴是用来过滤食物的吗，好聪明的设计 / Is your curved beak for filtering food? What a clever design",
+    "火烈鸟感觉特别独特，遇到你很开心 / Flamingos are so unique, I'm so happy to meet you",
+    "你平时是群居的吗，火烈鸟感觉都是大群的 / Do you live in a flock? Flamingos always seem to be in big groups",
   ],
   乌鸦: [
-    "乌鸦！感觉最聪明的鸟类之一",
-    "乌鸦会使用工具吗，听说这方面很厉害",
-    "你记忆力很好吗，乌鸦能记住很多人的脸",
-    "你喜欢收集亮晶晶的东西吗",
-    "乌鸦感觉特别有个性，不是一般的鸟",
-    "和乌鸦聊天感觉会很有意思，想试试",
+    "乌鸦！感觉最聪明的鸟类之一 / A crow! One of the smartest birds",
+    "乌鸦会使用工具吗，听说这方面很厉害 / Can crows use tools? I heard you're great at that",
+    "你记忆力很好吗，乌鸦能记住很多人的脸 / Is your memory good? Crows can remember tons of faces",
+    "你喜欢收集亮晶晶的东西吗 / Do you like collecting shiny things?",
+    "乌鸦感觉特别有个性，不是一般的鸟 / Crows have so much personality, not your average bird",
+    "和乌鸦聊天感觉会很有意思，想试试 / Chatting with a crow would be so interesting, I want to try",
   ],
   鹤: [
-    "鹤！感觉特别优雅的鸟类，飞起来一定很美",
-    "鹤是一夫一妻制的吗，在感情里很专一",
-    "你的舞蹈是真实存在的吗，鹤求偶舞",
-    "你能站在一条腿上休息吗，平衡感超好",
-    "鹤感觉很有气质，看到你档案就被吸引了",
-    "你的寿命很长吗，感觉鹤很有阅历",
+    "鹤！感觉特别优雅的鸟类，飞起来一定很美 / A crane! Such an elegant bird, you must look beautiful in flight",
+    "鹤是一夫一妻制的吗，在感情里很专一 / Are cranes monogamous? So devoted in love",
+    "你的舞蹈是真实存在的吗，鹤求偶舞 / Is the crane dance real? The courtship dance?",
+    "你能站在一条腿上休息吗，平衡感超好 / Can you rest standing on one leg? Amazing balance",
+    "鹤感觉很有气质，看到你档案就被吸引了 / Cranes have such grace, your profile drew me right in",
+    "你的寿命很长吗，感觉鹤很有阅历 / Do you live really long? Cranes seem so worldly",
   ],
   鳄: [
-    "鳄鱼！感觉最古老的种族之一，真的很厉害",
-    "你在水里的速度很快吗，还是说主要靠静止等待",
-    "鳄鱼的咬合力是所有种族里最强的之一吗",
-    "你的皮肤摸起来是粗糙的鳞片感吗",
-    "鳄鱼感觉特别沉稳，不轻易行动",
-    "你是冷血动物吗，喜欢晒太阳取暖",
+    "鳄鱼！感觉最古老的种族之一，真的很厉害 / A crocodile! One of the oldest species, truly impressive",
+    "你在水里的速度很快吗，还是说主要靠静止等待 / Are you fast in the water, or do you mostly wait motionless?",
+    "鳄鱼的咬合力是所有种族里最强的之一吗 / Is a crocodile's bite one of the strongest of any species?",
+    "你的皮肤摸起来是粗糙的鳞片感吗 / Does your skin feel like rough scales?",
+    "鳄鱼感觉特别沉稳，不轻易行动 / Crocodiles seem so composed, never moving rashly",
+    "你是冷血动物吗，喜欢晒太阳取暖 / Are you cold-blooded? Do you like basking in the sun to warm up?",
   ],
   蜥蜴: [
-    "蜥蜴！感觉特别有个性的爬行种族",
-    "你的尾巴断了可以再生吗，这个真的很神奇",
-    "蜥蜴变色能力怎么样，会根据环境改变颜色吗",
-    "你是冷血动物吗，早上需要先晒太阳活动",
-    "蜥蜴感觉很灵活，反应速度很快",
-    "你平时喜欢在哪里待着，高处还是地面",
+    "蜥蜴！感觉特别有个性的爬行种族 / A lizard! Such a quirky reptile",
+    "你的尾巴断了可以再生吗，这个真的很神奇 / Can your tail grow back if it breaks? That's so amazing",
+    "蜥蜴变色能力怎么样，会根据环境改变颜色吗 / How good are lizards at changing color? Do you change with your surroundings?",
+    "你是冷血动物吗，早上需要先晒太阳活动 / Are you cold-blooded? Do you need to sunbathe before getting going in the morning?",
+    "蜥蜴感觉很灵活，反应速度很快 / Lizards seem so agile, super quick reactions",
+    "你平时喜欢在哪里待着，高处还是地面 / Where do you like to hang out, up high or on the ground?",
   ],
   壁虎: [
-    "壁虎！爬墙高手，垂直面对你来说完全没难度",
-    "你的脚是用微绒毛贴墙的吗，这个原理很神奇",
-    "壁虎能在天花板上走吗，太厉害了",
-    "你的尾巴可以断掉再生吗",
-    "壁虎感觉很灵活，喜欢到处探索",
-    "你平时是夜行性的吗，夜晚比较活跃",
+    "壁虎！爬墙高手，垂直面对你来说完全没难度 / A gecko! Wall-climbing pro, vertical surfaces are nothing for you",
+    "你的脚是用微绒毛贴墙的吗，这个原理很神奇 / Do your feet stick to walls with tiny hairs? That's so amazing",
+    "壁虎能在天花板上走吗，太厉害了 / Can geckos walk on ceilings? Incredible",
+    "你的尾巴可以断掉再生吗 / Can your tail break off and grow back?",
+    "壁虎感觉很灵活，喜欢到处探索 / Geckos seem so nimble, you must love exploring",
+    "你平时是夜行性的吗，夜晚比较活跃 / Are you nocturnal? More active at night?",
   ],
   龟: [
-    "龟！感觉最长寿的种族，好厉害",
-    "你的壳真的是身体的一部分吗，不能脱掉对吗",
-    "龟行动缓慢但很稳，生活里也是慢节奏吗",
-    "你能缩进壳里完全躲起来吗",
-    "龟感觉见过很多，人生经验一定很丰富",
-    "你喜欢水里还是陆地，这两种龟都有吗",
+    "龟！感觉最长寿的种族，好厉害 / A turtle! The longest-living species, amazing",
+    "你的壳真的是身体的一部分吗，不能脱掉对吗 / Is your shell really part of your body? You can't take it off, right?",
+    "龟行动缓慢但很稳，生活里也是慢节奏吗 / Turtles move slow but steady, is your life slow-paced too?",
+    "你能缩进壳里完全躲起来吗 / Can you hide completely inside your shell?",
+    "龟感觉见过很多，人生经验一定很丰富 / Turtles have seen so much, you must have tons of life experience",
+    "你喜欢水里还是陆地，这两种龟都有吗 / Do you prefer water or land? Are there turtles for both?",
   ],
   青蛙: [
-    "青蛙！感觉最会跳的两栖种族",
-    "你能跳多高，身体比例来说很惊人吧",
-    "青蛙的皮肤是湿润的吗，需要保持湿度",
-    "你会发出什么叫声，夏天那种蛙鸣吗",
-    "青蛙感觉特别有活力，你也是这样吗",
-    "遇到青蛙很高兴，想认识你",
+    "青蛙！感觉最会跳的两栖种族 / A frog! The best jumper among amphibians",
+    "你能跳多高，身体比例来说很惊人吧 / How high can you jump? It must be amazing for your size",
+    "青蛙的皮肤是湿润的吗，需要保持湿度 / Is frog skin moist? Do you need to stay damp?",
+    "你会发出什么叫声，夏天那种蛙鸣吗 / What sound do you make? That summer croaking?",
+    "青蛙感觉特别有活力，你也是这样吗 / Frogs seem so full of energy, are you like that too?",
+    "遇到青蛙很高兴，想认识你 / So happy to meet a frog, I'd love to get to know you",
   ],
   蝾螈: [
-    "蝾螈！感觉特别神奇的两栖种族",
-    "你的四肢断了可以再生吗，这个能力很惊人",
-    "钝口螈的话，你是那种永远幼态的吗，好可爱",
-    "蝾螈感觉很安静，不怎么叫对吗",
-    "你是水里生活还是陆地，两栖的话两边都行",
-    "感觉蝾螈很特别，今天打招呼了",
+    "蝾螈！感觉特别神奇的两栖种族 / A salamander! Such a magical amphibian",
+    "你的四肢断了可以再生吗，这个能力很惊人 / Can your limbs regrow if you lose them? That's incredible",
+    "钝口螈的话，你是那种永远幼态的吗，好可爱 / If you're an axolotl, do you stay baby-faced forever? So cute",
+    "蝾螈感觉很安静，不怎么叫对吗 / Salamanders seem so quiet, you don't make many sounds, right?",
+    "你是水里生活还是陆地，两栖的话两边都行 / Do you live in water or on land? As an amphibian, either works",
+    "感觉蝾螈很特别，今天打招呼了 / Salamanders seem so special, so I said hi today",
   ],
   蜘蛛: [
-    "蜘蛛！八只眼睛，视野是360度的吗",
-    "你会结网吗，织出来的网是用来捕猎的吗",
-    "蜘蛛的丝很强韧对吗，比钢铁还坚固",
-    "你有毒吗，大部分蜘蛛都有一点点",
-    "蜘蛛感觉特别有耐心，等待猎物那种沉稳",
-    "遇到蜘蛛感觉很特别，今天打招呼了",
+    "蜘蛛！八只眼睛，视野是360度的吗 / A spider! Eight eyes, is your vision 360 degrees?",
+    "你会结网吗，织出来的网是用来捕猎的吗 / Do you spin webs? Are they for catching prey?",
+    "蜘蛛的丝很强韧对吗，比钢铁还坚固 / Spider silk is super strong, right? Stronger than steel",
+    "你有毒吗，大部分蜘蛛都有一点点 / Are you venomous? Most spiders are a little",
+    "蜘蛛感觉特别有耐心，等待猎物那种沉稳 / Spiders seem so patient, that calm way of waiting for prey",
+    "遇到蜘蛛感觉很特别，今天打招呼了 / Meeting a spider feels so special, so I said hi today",
   ],
   蝎子: [
-    "蝎子！感觉很有气势的节肢种族",
-    "你的毒刺有多毒，危险吗",
-    "蝎子的钳子力量很大吗",
-    "你是夜行性的吗，白天躲在哪里",
-    "蝎子感觉特别有威慑力，但你性格是什么样的",
-    "遇到蝎子感觉很特别，想认识你",
+    "蝎子！感觉很有气势的节肢种族 / A scorpion! Such an imposing arthropod",
+    "你的毒刺有多毒，危险吗 / How venomous is your stinger? Is it dangerous?",
+    "蝎子的钳子力量很大吗 / Are scorpion pincers really strong?",
+    "你是夜行性的吗，白天躲在哪里 / Are you nocturnal? Where do you hide during the day?",
+    "蝎子感觉特别有威慑力，但你性格是什么样的 / Scorpions seem so intimidating, but what's your personality like?",
+    "遇到蝎子感觉很特别，想认识你 / Meeting a scorpion feels so special, I'd love to get to know you",
   ],
   螃蟹: [
-    "螃蟹！横着走的种族，感觉很有趣",
-    "你真的只能横着走吗，还是说可以直行",
-    "螃蟹的壳很硬吗，保护性很强",
-    "你的钳子很有力吗，夹东西很厉害",
-    "螃蟹感觉很有个性，想认识你",
-    "你是淡水螃蟹还是海水螃蟹",
+    "螃蟹！横着走的种族，感觉很有趣 / A crab! The sideways-walking species, so fun",
+    "你真的只能横着走吗，还是说可以直行 / Can you really only walk sideways, or can you go straight too?",
+    "螃蟹的壳很硬吗，保护性很强 / Is a crab shell really hard? Great protection?",
+    "你的钳子很有力吗，夹东西很厉害 / Are your pincers strong? Great at pinching things?",
+    "螃蟹感觉很有个性，想认识你 / Crabs have so much personality, I'd love to get to know you",
+    "你是淡水螃蟹还是海水螃蟹 / Are you a freshwater crab or a saltwater crab?",
   ],
 };
 
@@ -7688,6 +7016,7 @@ function _startSingleQuestions() {
 }
 
 function _showSingleQuestion() {
+  if (_quietOverlayOpen()) return;
   const text = _SINGLE_QUESTION_POOL[_randInt(0, _SINGLE_QUESTION_POOL.length - 1)];
   const el = document.createElement("div");
   el.className = "swipe-interrupt";
@@ -7826,7 +7155,7 @@ function _sendRealFakeMsg(sender, content, alertStyle) {
     });
     return;
   }
-  fetch("/messages", {
+  api("/messages", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
@@ -7941,11 +7270,12 @@ function _startFloodSkips() {
 }
 
 function _showSkipNotif(name) {
+  if (_quietOverlayOpen()) return;
   const el = document.createElement("div");
   el.className = "swipe-interrupt skip-notif";
   el.style.top = _randInt(8, 72) + "vh";
   el.style.left = _randInt(3, 55) + "vw";
-  el.innerHTML = `「${name}」跳过了你 ${iconImg("xmark",2)} / skipped you<button class="interrupt-close" onclick="this.parentElement.remove()">✕</button>`;
+  el.innerHTML = `${iconImg("xmark",2)} ${biHtml(`「${name}」跳过了你`, `"${name}" skipped you`)}<button class="interrupt-close" onclick="this.parentElement.remove()">✕</button>`;
   document.body.appendChild(el);
   setTimeout(() => el?.remove(), 7000);
 }
@@ -7981,13 +7311,15 @@ function _startProfileViewNotifs() {
 }
 
 function _showProfileViewNotif() {
+  if (_quietOverlayOpen()) return;
+  // 名字由 biHtml 转义
   const name = _pickViewerName();
   const secs = _randInt(4, 87);
   const el = document.createElement("div");
   el.className = "swipe-interrupt";
   el.style.top = _randInt(8, 72) + "vh";
   el.style.left = _randInt(3, 55) + "vw";
-  el.innerHTML = `${iconImg("eye",2)} 「${name}」查看了你的档案，停留了 ${secs} 秒 / viewed your profile for ${secs}s<button class="interrupt-close" onclick="this.parentElement.remove()">✕</button>`;
+  el.innerHTML = `${iconImg("eye",2)} ${biHtml(`「${name}」查看了你的档案，停留了 ${secs} 秒`, `"${name}" viewed your profile for ${secs}s`)}<button class="interrupt-close" onclick="this.parentElement.remove()">✕</button>`;
   document.body.appendChild(el);
   setTimeout(() => el?.remove(), 8000);
 }
@@ -8034,13 +7366,15 @@ const _TIME_PHRASES = [
 ];
 
 function _showUnrepliedReminder() {
+  if (_quietOverlayOpen()) return;
+  // 名字由 biHtml 转义；时间短语是「一整天/a whole day」，中英文两半各取一边
   const name = _pickViewerName();
-  const timeStr = _TIME_PHRASES[_randInt(0, _TIME_PHRASES.length - 1)];
+  const [tZh, tEn] = _TIME_PHRASES[_randInt(0, _TIME_PHRASES.length - 1)].split("/");
   const texts = [
-    `${iconImg("bubble",2)} 你已经 ${timeStr} 没有回复「${name}」了 / You haven't replied to 「${name}」in ${timeStr}`,
-    `${iconImg("clock",2)} 你还没有回复「${name}」，对方可能在等你 / 「${name}」might be waiting`,
-    `${iconImg("envelope",2)} 「${name}」发来的消息你还没有回复哦 / You left 「${name}」on read`,
-    `${iconImg("bubble",2)} 你已经忘记回复「${name}」了吗？/ Did you forget to reply to 「${name}」?`,
+    `${iconImg("bubble",2)} ${biHtml(`你已经 ${tZh} 没有回复「${name}」了`, `You haven't replied to "${name}" in ${tEn}`)}`,
+    `${iconImg("clock",2)} ${biHtml(`你还没有回复「${name}」，对方可能在等你`, `"${name}" might be waiting`)}`,
+    `${iconImg("envelope",2)} ${biHtml(`「${name}」发来的消息你还没有回复哦`, `You left "${name}" on read`)}`,
+    `${iconImg("bubble",2)} ${biHtml(`你已经忘记回复「${name}」了吗？`, `Did you forget to reply to "${name}"?`)}`,
   ];
   const el = document.createElement("div");
   el.className = "swipe-interrupt";
@@ -8053,18 +7387,6 @@ function _showUnrepliedReminder() {
 
 // ── Toast 通知 ───────────────────────────────────────────────
 
-function showToast(text, icon) {
-  let toast = document.getElementById("toast-notif");
-  if (!toast) {
-    toast = document.createElement("div");
-    toast.id = "toast-notif";
-    document.body.appendChild(toast);
-  }
-  toast.innerHTML = icon ? `${iconImg(icon, 2)} ${text}` : text;
-  toast.classList.add("toast-show");
-  setTimeout(() => toast.classList.remove("toast-show"), 3500);
-}
-
 function skip() {
   if (currentIndex >= profiles.length) return;
   openReasonPopup("skip");
@@ -8073,7 +7395,7 @@ function skip() {
 function doSkip(label, reason) {
   if (currentUser && currentIndex < profiles.length) {
     const target = profiles[currentIndex];
-    fetch("/skip", {
+    api("/skip", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -8101,37 +7423,39 @@ function openReasonPopup(action) {
 
   const p = profiles[currentIndex];
   const rel = p.relationship || {};
+  // 顺序、项目和档案卡一致（旧档案里的伴侣相关字段有值也照常列出）
+  const par = p.parents || {};
   const fields = [
     { label: "物种/Species", value: p.breed },
     { label: "性别/Gender", value: p.gender },
     { label: "年龄/Age", value: p.age },
     { label: "身高/Height", value: p.height },
     { label: "性取向/Orientation", value: p.orientation },
-    { label: "婚恋/Status", value: p.sterilized },
+    { label: "婚恋/Status", value: p.sterilized || rel.status },
+    { label: "其他关系/Other Ships", value: rel.ships && rel.ships !== REL_SHIP_NONE ? rel.ships : "" },
     { label: "MBTI", value: p.mbti },
     { label: "星座/Horoscope", value: p.horoscope },
-    { label: "领地/Territory", value: p.hukou },
-    { label: "车/Vehicle", value: p.vehicle },
+    { label: "领地/Territory", value: p.house?.city || p.house?.district || p.hukou },
+    { label: "车/Vehicle", value: p.vehicle?.types?.length },
     { label: "学历/Education", value: p.edu },
     { label: "职业/Job", value: p.occupation },
     { label: "月收入/Income", value: p.income },
     { label: "目的/Here For", value: rel.datingPurpose },
     { label: "期望关系/Looking For", value: rel.relationshipGoal },
-    { label: "目前伴侣/Partner", value: rel.currentPartner },
-    { label: "伴侣数量/# Partners", value: rel.partnerCount },
+    { label: "谈过/Past Rels", value: rel.pastRelCount },
+    { label: "前任联系/Ex Contact", value: rel.exContact },
+    { label: "还爱前任/Still Love Ex", value: rel.stillLoveEx },
+    { label: "白月光/Moonlight", value: rel.whiteMoonlight },
     { label: "子女/Kids", value: rel.kids },
     { label: "暗恋/Crush", value: rel.crush },
+    { label: "目前伴侣/Partner", value: rel.currentPartner },
+    { label: "伴侣数量/# Partners", value: rel.partnerCount },
     { label: "暧昧/Ambiguous", value: rel.ambiguous },
     { label: "秘密伴侣/Secret", value: rel.secretPartner },
     { label: "境外伴侣/Foreign", value: rel.foreignPartner },
     { label: "异地伴侣/Long Dist", value: rel.otherCityPartner },
-    { label: "白月光/Moonlight", value: rel.whiteMoonlight },
-    { label: "谈过/Past Rels", value: rel.pastRelCount },
-    { label: "前任联系/Ex Contact", value: rel.exContact },
-    { label: "还爱前任/Still Love Ex", value: rel.stillLoveEx },
     { label: "爱好/Hobbies", value: p.hobby },
-    { label: "家庭状况/Family", value: p.parents?.status },
-    { label: "兄弟姐妹/Siblings", value: p.parents?.siblingCount },
+    { label: "家庭状况/Family", value: par.status || par.relationship || par.siblingCount },
     { label: "择偶标准/Standards", value: p.standards },
   ].filter((f) => f.value);
 
@@ -8178,120 +7502,14 @@ function submitReason() {
   else if (action === "skip") doSkip(label, reason);
 }
 
-function onEditBreedClassChange() {
-  const cls = document.getElementById("edit-breedClass").value;
-
-  document.getElementById("edit-breedSubgroup").innerHTML =
-    '<option value="" disabled selected hidden>选择细类 / Select subgroup...</option>';
-  document.getElementById("edit-breedSubSubgroup").innerHTML =
-    '<option value="" disabled selected hidden>选择子类 / Select sub-group...</option>';
-  document.getElementById("edit-breed").innerHTML =
-    '<option value="" disabled selected hidden>选择物种 / Select species...</option>';
-  document
-    .getElementById("edit-breedSubSubgroupWrapper")
-    .classList.add("hidden");
-
-  if (breedSubgroups[cls]) {
-    const sgSelect = document.getElementById("edit-breedSubgroup");
-    Object.keys(breedSubgroups[cls]).forEach((sg) => {
-      const opt = document.createElement("option");
-      opt.value = sg;
-      opt.textContent = sg;
-      sgSelect.appendChild(opt);
-    });
-    document
-      .getElementById("edit-breedSubgroupWrapper")
-      .classList.remove("hidden");
-    document
-      .getElementById("edit-breedSpecificWrapper")
-      .classList.add("hidden");
-  } else {
-    document
-      .getElementById("edit-breedSubgroupWrapper")
-      .classList.add("hidden");
-    const select = document.getElementById("edit-breed");
-    (breedData[cls] || []).forEach((b) => {
-      const opt = document.createElement("option");
-      opt.value = b;
-      opt.textContent = b;
-      select.appendChild(opt);
-    });
-    document
-      .getElementById("edit-breedSpecificWrapper")
-      .classList.remove("hidden");
-  }
-}
-
-function onEditBreedSubgroupChange() {
-  const cls = document.getElementById("edit-breedClass").value;
-  const sg = document.getElementById("edit-breedSubgroup").value;
-  const val = (breedSubgroups[cls] || {})[sg];
-
-  document.getElementById("edit-breedSubSubgroup").innerHTML =
-    '<option value="" disabled selected hidden>选择子类 / Select sub-group...</option>';
-  document.getElementById("edit-breed").innerHTML =
-    '<option value="" disabled selected hidden>选择物种 / Select species...</option>';
-
-  if (val && !Array.isArray(val)) {
-    const ssgSelect = document.getElementById("edit-breedSubSubgroup");
-    Object.keys(val).forEach((ssg) => {
-      const opt = document.createElement("option");
-      opt.value = ssg;
-      opt.textContent = ssg;
-      ssgSelect.appendChild(opt);
-    });
-    document
-      .getElementById("edit-breedSubSubgroupWrapper")
-      .classList.remove("hidden");
-    document
-      .getElementById("edit-breedSpecificWrapper")
-      .classList.add("hidden");
-  } else {
-    document
-      .getElementById("edit-breedSubSubgroupWrapper")
-      .classList.add("hidden");
-    const select = document.getElementById("edit-breed");
-    (val || []).forEach((b) => {
-      const opt = document.createElement("option");
-      opt.value = b;
-      opt.textContent = b;
-      select.appendChild(opt);
-    });
-    document
-      .getElementById("edit-breedSpecificWrapper")
-      .classList.remove("hidden");
-  }
-}
-
-function onEditBreedSubSubgroupChange() {
-  const cls = document.getElementById("edit-breedClass").value;
-  const sg = document.getElementById("edit-breedSubgroup").value;
-  const ssg = document.getElementById("edit-breedSubSubgroup").value;
-  const select = document.getElementById("edit-breed");
-  select.innerHTML =
-    '<option value="" disabled selected hidden>选择物种 / Select species...</option>';
-  (((breedSubgroups[cls] || {})[sg] || {})[ssg] || []).forEach((b) => {
-    const opt = document.createElement("option");
-    opt.value = b;
-    opt.textContent = b;
-    select.appendChild(opt);
-  });
-  document
-    .getElementById("edit-breedSpecificWrapper")
-    .classList.remove("hidden");
-}
-
 function goToMyProfile() {
   if (!currentUser) return;
   stopSwipeInterrupts();
-  // Fetch fresh profile to get latest grid/likes/skips from server
-  fetch("/profiles")
-    .then((r) => r.json())
-    .then((data) => {
-      const fresh = data.find((p) => p.username === currentUser.username);
-      if (fresh) currentUser = fresh;
-      _openMyProfileEdit(currentUser);
-    });
+  // 只取自己这一份最新档案（grid / likes / skips）
+  fetchProfile(currentUser.username).then((fresh) => {
+    if (fresh) currentUser = fresh;
+    _openMyProfileEdit(currentUser);
+  });
 }
 
 function _openMyProfileEdit(u) {
@@ -8307,31 +7525,301 @@ function _openMyProfileEdit(u) {
 
 function closeMyProfile() {
   document.getElementById("profile-edit").classList.add("hidden");
+  // 从「我」菜单进来的：回到菜单，菜单关掉时才恢复浏览页的弹窗
+  if (!document.getElementById("me-overlay")?.classList.contains("hidden")) return;
   if (document.getElementById("swipe-page")?.classList.contains("active"))
     startSwipeInterrupts();
 }
 
-// Impression Function
-const _CELL_ALPHA = {
-  1: 0.25,
-  2: 0.49,
-  3: 0.75,
-  4: 1,
-  pixel: 1,
-  text: 1,
-  "#": 1,
-  "#1": 0.25,
-  "#2": 0.49,
-  "#3": 0.75,
-  "#4": 1,
-};
-function _cellAlpha(cell) {
-  if (Array.isArray(cell)) return cell[1];
-  return _CELL_ALPHA[cell] ?? 1;
+// ── 排行榜：和大屏 web 同一个规则（分数 − 被跳过次数，取前十）──
+// 先显示列表，点一个人进去看档案；只能看，不接长按 / 点按（不能写解读、不能赞同），也没有喜欢 / 跳过按钮
+// 服务器 /ranking 只发前十名；上次的结果先显示，新数据到了再刷新；列表头像画小图并缓存
+let _rankList = [];
+const _rankThumbCache = new Map();
+
+// 列表小头像：同一个人、同一张画、同一套配色只画一次
+function _rankThumb(p) {
+  if (!p.grid && p.avatar) return p.avatar;
+  const key = `${p.username}|${currentTheme.bg}${currentTheme.ink}|${p.gridText || ""}|${JSON.stringify(p.grid)}`;
+  if (!_rankThumbCache.has(key)) {
+    if (_rankThumbCache.size > 60) _rankThumbCache.clear();
+    _rankThumbCache.set(key, renderGridAsAvatar(p.grid, p.gridText, 160));
+  }
+  return _rankThumbCache.get(key);
+}
+let _rankDetailIdx = -1;
+const _rankScore = (p) => Math.max(0, (p.score ?? 60) - (p.skips?.length || 0));
+
+function openRanking() {
+  stopSwipeInterrupts();
+  _quietOverlayEnter();
+  _rankDetailIdx = -1;
+  _showRankList();
+  // 有上次的结果就先显示，没有才显示「加载中」
+  if (_rankList.length) _renderRankList();
+  else document.getElementById("rank-list").innerHTML = `<p class="rank-empty">加载中… / Loading…</p>`;
+  document.getElementById("rank-overlay").classList.remove("hidden");
+  api("/ranking")
+    .then((r) => r.json())
+    .then((list) => {
+      if (!Array.isArray(list)) throw new Error();
+      _rankList = list;
+      // 正在看某个人的档案时不打断，回到列表时就是新的
+      if (_rankDetailIdx < 0) _renderRankList();
+    })
+    .catch(() => {
+      if (!_rankList.length)
+        document.getElementById("rank-list").innerHTML = `<p class="rank-empty">加载失败，请稍后再试 / Failed to load, please try again</p>`;
+    });
 }
 
+function _renderRankList() {
+  const list = document.getElementById("rank-list");
+  if (!_rankList.length) {
+    list.innerHTML = `<p class="rank-empty">还没有人上榜 / No one on the list yet</p>`;
+    return;
+  }
+  list.innerHTML = _rankList
+    .map((p, i) => {
+      // 列表只需要名字、物种、喜欢 / 跳过数，不用 cardValues（它会画一张 1024 的大头像）
+      const c = { name: p.name, breed: cardBreed(p), likes: p.likes?.length || 0, skips: p.skips?.length || 0 };
+      const score = _rankScore(p);
+      return `
+      <button class="nes-btn rank-item${i < 3 ? " rank-top" : ""}" onclick="openRankDetail(${i})">
+        <span class="rank-no">No.${i + 1}</span>
+        <img class="rank-avatar" src="${_rankThumb(p)}" alt="" />
+        <span class="rank-info">
+          <span class="rank-name" data-noi18n>${escapeHtml(c.name || "—")}</span>
+          <span class="rank-breed">${fmtBI(c.breed)}</span>
+          <span class="rank-stats">
+            ${iconImg("heart_sm", 2)} ${c.likes}
+            <img src="${getPixelVomitUrl()}" class="rank-vomit" alt="" /> ${c.skips}
+          </span>
+        </span>
+        <span class="rank-score${score < 60 ? " stamp-red" : ""}">${score}</span>
+      </button>`;
+    })
+    .join("");
+}
+
+function openRankDetail(i) {
+  const p = _rankList[i];
+  if (!p) return;
+  _rankDetailIdx = i;
+  const body = document.getElementById("rank-detail-body");
+  body.innerHTML = renderCardHTML(p);
+  attachSectionDragScroll(body);
+  document.getElementById("rank-detail-title").textContent = `No.${i + 1}`;
+  document.getElementById("rank-title").classList.add("hidden");
+  document.getElementById("rank-detail-title").classList.remove("hidden");
+  document.getElementById("rank-list").classList.add("hidden");
+  document.getElementById("rank-detail").classList.remove("hidden");
+  body.parentElement.scrollTop = 0;
+}
+
+function _showRankList() {
+  _rankDetailIdx = -1;
+  document.getElementById("rank-title").classList.remove("hidden");
+  document.getElementById("rank-detail-title").classList.add("hidden");
+  document.getElementById("rank-list").classList.remove("hidden");
+  document.getElementById("rank-detail").classList.add("hidden");
+}
+
+// ◀：档案页回到列表，列表里再按就关掉排行榜
+function rankBack() {
+  if (_rankDetailIdx >= 0) {
+    _showRankList();
+    return _renderRankList();
+  }
+  document.getElementById("rank-overlay").classList.add("hidden");
+  if (document.getElementById("swipe-page")?.classList.contains("active"))
+    startSwipeInterrupts();
+  _resumeAfterOverlay();
+}
+
+// 换配色：排行榜开着时，头像跟着重画
+document.addEventListener("themechange", () => {
+  if (document.getElementById("rank-overlay").classList.contains("hidden")) return;
+  _renderRankList();
+  if (_rankDetailIdx >= 0) openRankDetail(_rankDetailIdx);
+});
+
+// ── 「我」：菜单 → 我的档案 / 语言 / 色调 ──
+const _ME_TITLES = { menu: "我 Me", lang: "语言 Language", theme: "色调 Theme", admin: "后台 Admin" };
+// 子页面按 ◀ 回到哪一页
+const _ME_PARENT = { lang: "menu", theme: "menu", admin: "menu", adminUser: "admin", adminConvo: "adminUser" };
+let _meView = "menu";
+
+function openMePage() {
+  stopSwipeInterrupts();
+  _quietOverlayEnter();
+  document.getElementById("me-admin-row").classList.toggle("hidden", !currentUser?.isAdmin);
+  showMeView("menu");
+  document.getElementById("me-overlay").classList.remove("hidden");
+}
+
+function closeMePage() {
+  document.getElementById("me-overlay").classList.add("hidden");
+  if (document.getElementById("swipe-page")?.classList.contains("active"))
+    startSwipeInterrupts();
+  _resumeAfterOverlay();
+}
+
+function showMeView(view) {
+  _meView = view;
+  document.querySelectorAll("#me-overlay .me-view").forEach((el) => {
+    el.classList.toggle("hidden", el.id !== `me-view-${view}`);
+  });
+  if (_ME_TITLES[view]) document.getElementById("me-title").textContent = _ME_TITLES[view];
+  if (view === "theme") _buildThemePicker();
+  document.getElementById("me-overlay").scrollTop = 0;
+}
+
+// ◀：子页面回到上一页，菜单里再按就关掉
+function meBack() {
+  if (_meView === "menu") closeMePage();
+  else showMeView(_ME_PARENT[_meView] || "menu");
+}
+
+// ── 后台（只有管理员）：所有人的档案、所有私信、重置密码 ──
+let _adminUsers = [];
+let _adminMessages = [];
+let _adminUser = null;
+
+function openAdmin() {
+  showMeView("admin");
+  document.getElementById("admin-users").innerHTML = `<p class="rank-empty">加载中… / Loading…</p>`;
+  Promise.all([api("/admin/users").then((r) => r.json()), api("/admin/messages").then((r) => r.json())])
+    .then(([users, msgs]) => {
+      _adminUsers = Array.isArray(users) ? users : [];
+      _adminMessages = Array.isArray(msgs) ? msgs : [];
+      _renderAdminUsers();
+    })
+    .catch(() => {
+      document.getElementById("admin-users").innerHTML = `<p class="rank-empty">加载失败 / Failed to load</p>`;
+    });
+}
+
+function _renderAdminUsers() {
+  const q = (document.getElementById("admin-search").value || "").trim().toLowerCase();
+  const list = _adminUsers.filter(
+    (u) => !q || String(u.name || "").toLowerCase().includes(q) || String(u.username).toLowerCase().includes(q),
+  );
+  document.getElementById("admin-users").innerHTML =
+    `<p class="admin-count">${list.length} / ${_adminUsers.length}</p>` +
+    list
+      .map(
+        (u) => `
+      <button class="nes-btn admin-row" data-user="${escapeHtml(u.username)}" onclick="openAdminUser(this.dataset.user)">
+        <span class="admin-row-main" data-noi18n><b>${escapeHtml(u.name || "—")}</b> <small>@${escapeHtml(u.username)}</small></span>
+        <span class="admin-row-meta">${u.score ?? "—"} · ${iconImg("bubble", 2)} ${u.msgCount}</span>
+      </button>`,
+      )
+      .join("");
+}
+
+function openAdminUser(username) {
+  _adminUser = _adminUsers.find((u) => u.username === username);
+  if (!_adminUser) return;
+  showMeView("adminUser");
+  document.getElementById("me-title").textContent = _adminUser.name || _adminUser.username;
+  document.getElementById("admin-new-pw").value = "";
+  // 按对方分组：每段对话一行
+  const convos = {};
+  _adminMessages
+    .filter((m) => m.from === username || m.to === username)
+    .forEach((m) => {
+      const other = m.from === username ? m.to : m.from;
+      const otherName = (m.from === username ? m.toName : m.fromName) || other;
+      (convos[other] = convos[other] || { other, otherName, msgs: [] }).msgs.push(m);
+    });
+  const rows = Object.values(convos).sort((a, b) => b.msgs.length - a.msgs.length);
+  document.getElementById("admin-convos").innerHTML = rows.length
+    ? rows
+        .map(
+          (c) => `
+      <button class="nes-btn admin-row" data-other="${escapeHtml(c.other)}" onclick="openAdminConvo(this.dataset.other)">
+        <span class="admin-row-main" data-noi18n>↔ <b>${escapeHtml(c.otherName)}</b> <small>@${escapeHtml(c.other)}</small></span>
+        <span class="admin-row-meta">${c.msgs.length}</span>
+      </button>`,
+        )
+        .join("")
+    : `<p class="rank-empty">没有私信 / No messages</p>`;
+  // 档案：只看，不接长按 / 点按
+  const card = document.getElementById("admin-user-card");
+  card.innerHTML = renderCardHTML(_adminUser);
+  attachSectionDragScroll(card);
+}
+
+function openAdminConvo(other) {
+  const me = _adminUser?.username;
+  const msgs = _adminMessages
+    .filter((m) => (m.from === me && m.to === other) || (m.from === other && m.to === me))
+    .sort((a, b) => new Date(a.date) - new Date(b.date));
+  showMeView("adminConvo");
+  document.getElementById("me-title").textContent = `${_adminUser.name || me} ↔ ${msgs[0]?.from === other ? msgs[0].fromName || other : msgs[0]?.toName || other}`;
+  document.getElementById("admin-thread").innerHTML = msgs
+    .map((m) => {
+      const time = new Date(m.date).toLocaleString(_timeLocale(), { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" });
+      return `
+      <div class="bubble-row ${m.from === me ? "bubble-mine" : "bubble-theirs"}">
+        <div class="bubble">
+          <div class="bubble-text"${_noI18nAttr(m.content)}>${escapeHtml(m.content)}</div>
+          <div class="bubble-time">${time}${m.read ? "" : " · " + L("未读", "unread")}</div>
+        </div>
+      </div>`;
+    })
+    .join("");
+}
+
+function adminResetPassword() {
+  const pw = document.getElementById("admin-new-pw").value.trim();
+  if (!_adminUser || !pw) return showAlert("请输入新密码\nPlease enter a new password.");
+  api("/admin/reset-password", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ username: _adminUser.username, newPassword: pw }),
+  })
+    .then((r) => {
+      if (!r.ok) throw new Error();
+      document.getElementById("admin-new-pw").value = "";
+      showAlert(`已把 ${_adminUser.username} 的密码重置为：${pw}\nPassword for ${_adminUser.username} reset to: ${pw}`);
+    })
+    .catch(() => showAlert("重置失败\nReset failed."));
+}
+
+function _buildThemePicker() {
+  const wrap = document.getElementById("theme-presets");
+  wrap.innerHTML = THEME_PRESETS.map(
+    (t) => `
+    <button class="nes-btn theme-swatch${currentTheme.id === t.id ? " selected" : ""}" data-id="${t.id}"
+      onclick="setTheme(THEME_PRESETS.find((x) => x.id === this.dataset.id))">
+      <span class="theme-swatch-chip" style="background:${t.bg};color:${t.ink}">Aa</span>
+      <span>${t.zh} ${t.en}</span>
+    </button>`,
+  ).join("");
+  document.getElementById("theme-custom-bg").value = currentTheme.bg;
+  document.getElementById("theme-custom-ink").value = currentTheme.ink;
+}
+
+// 自定义：改底色时自动配一个合适的墨色；之后还可以单独改墨色
+function onCustomThemeBg(bg) {
+  const ink = suggestInk(bg);
+  document.getElementById("theme-custom-ink").value = ink;
+  setTheme({ id: "custom", bg, ink });
+}
+function onCustomThemeInk(ink) {
+  setTheme({ id: "custom", bg: document.getElementById("theme-custom-bg").value, ink });
+}
+
+document.addEventListener("themechange", () => {
+  document.querySelectorAll("#theme-presets .theme-swatch").forEach((b) => {
+    b.classList.toggle("selected", b.dataset.id === currentTheme.id);
+  });
+});
+
 function _applyImpressionToGrid(grid, text) {
-  if (!grid || !text) return;
+  if (!_isValidGrid(grid) || !text) return;
   const filled = [];
   for (let y = 0; y < 32; y++) {
     for (let x = 0; x < 32; x++) {
@@ -8381,7 +7869,7 @@ function impression(text) {
   if (!text) return;
 
   if (currentIndex >= profiles.length) {
-    alert("没有更多兽人可以评论了 / No more anthros to comment on");
+    showAlert("没有更多兽人可以评论了 / No more anthros to comment on");
     return;
   }
 
@@ -8394,7 +7882,7 @@ function impression(text) {
   }
 
   // Persist to server in the background
-  fetch("/impression", {
+  api("/impression", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
@@ -8422,12 +7910,6 @@ function submitSwipeImpression() {
   impression(text);
 }
 
-function openSendMsgPopup() {
-  if (!currentUser || currentIndex >= profiles.length) return;
-  document.getElementById("swipe-sendmsg-input").value = "";
-  document.getElementById("swipe-sendmsg-popup").classList.remove("hidden");
-}
-
 function closeSendMsgPopup() {
   document.getElementById("swipe-sendmsg-popup").classList.add("hidden");
 }
@@ -8437,7 +7919,7 @@ function submitSwipeSendMsg() {
   if (!text || !currentUser || currentIndex >= profiles.length) return;
   const target = profiles[currentIndex];
   _cacheOutbox(currentUser.username, currentUser.name, target.username, target.name, text);
-  fetch("/messages", {
+  api("/messages", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
@@ -8450,86 +7932,13 @@ function submitSwipeSendMsg() {
   }).then(() => closeSendMsgPopup());
 }
 
-// Avatar Rendering Function
-function renderGridAsAvatar(grid, gridText) {
-  const canvas = document.createElement("canvas");
-  // 1024×1024 = 32px per cell — Zpix pixel font renders cleanest at multiples of its base size
-  const size = 1024;
-  canvas.width = size;
-  canvas.height = size;
-  const ctx = canvas.getContext("2d");
-  ctx.imageSmoothingEnabled = false;
-
-  const BG   = "#a9b0a2";
-  const DEAD = "#a2a99b"; // subtle inactive-cell tint for the grid
-  const INK  = "rgb(40,56,24)";
-
-  ctx.fillStyle = BG;
-  ctx.fillRect(0, 0, size, size);
-
-  const cellSize = size / 32; // 32px per cell (pixel art grid)
-  const gap = 2;
-
-  // Finer background texture: 64×64 cells at 1px gap
-  const bgGrid = 64;
-  const bgCell = size / bgGrid;
-  const bgGap = 1;
-  ctx.fillStyle = DEAD;
-  for (let y = 0; y < bgGrid; y++) {
-    for (let x = 0; x < bgGrid; x++) {
-      ctx.fillRect(x * bgCell + bgGap, y * bgCell + bgGap, bgCell - bgGap * 2, bgCell - bgGap * 2);
-    }
-  }
-
-  // Font: Zpix at 26px is at its native pixel size on this canvas
-  ctx.textAlign = "center";
-  ctx.textBaseline = "middle";
-  ctx.font = `26px "Zpix", monospace`;
-
-  const pixelAlpha = { 1: 0.25, 2: 0.49, 3: 0.75, 4: 1 };
-  const textAlpha  = { "#1": 0.25, "#2": 0.49, "#3": 0.75, "#4": 1 };
-
-  ctx.shadowColor = "rgba(40,56,24,0.60)";
-  ctx.shadowOffsetX = 3;
-  ctx.shadowOffsetY = 3;
-  ctx.shadowBlur = 0;
-
-  const drawPixel = (x, y, alpha) => {
-    ctx.fillStyle = alpha >= 1 ? INK : `rgba(40,56,24,${alpha})`;
-    ctx.fillRect(x * cellSize + gap, y * cellSize + gap, cellSize - gap * 2, cellSize - gap * 2);
-  };
-
-  const drawChar = (x, y, ch, alpha) => {
-    ctx.fillStyle = alpha >= 1 ? INK : `rgba(40,56,24,${alpha})`;
-    ctx.fillText(ch, x * cellSize + cellSize / 2, y * cellSize + cellSize / 2);
-  };
-
-  for (let y = 0; y < 32; y++) {
-    for (let x = 0; x < 32; x++) {
-      const cell = grid[y][x];
-      if (cell === "pixel" || cell === 4)            drawPixel(x, y, 1);
-      else if (pixelAlpha[cell] !== undefined)       drawPixel(x, y, pixelAlpha[cell]);
-      else if (cell === "text" || cell === "#" || cell === "#4") drawChar(x, y, gridText, 1);
-      else if (textAlpha[cell] !== undefined)        drawChar(x, y, gridText, textAlpha[cell]);
-      else if (Array.isArray(cell))                  drawChar(x, y, cell[0], cell[1]);
-      else if (cell !== null && cell !== "/")        drawChar(x, y, cell, 1);
-    }
-  }
-
-  return canvas.toDataURL();
-}
-
 // ── Profile View Overlay ─────────────────────────────────────
 
 function viewConvoProfile() {
   if (!convoTarget) return;
-  fetch("/profiles")
-    .then((res) => res.json())
-    .then((data) => {
-      const p = data.find((u) => u.username === convoTarget.username);
-      if (!p) return;
-      showProfileView(p);
-    });
+  fetchProfile(convoTarget.username).then((p) => {
+    if (p) showProfileView(p);
+  });
 }
 
 function showProfileView(p) {

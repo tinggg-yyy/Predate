@@ -1,4 +1,3 @@
-let petCanvas;
 let tool = "brush";
 
 let grid = [];
@@ -12,8 +11,6 @@ function setup() {
   let canvas = createCanvas((windowWidth * 4) / 5, (windowWidth * 4) / 5);
   canvas.parent("p5-canvas-container");
   clear();
-  petCanvas = createGraphics(32, 32);
-  petCanvas.clear();
 
   for (let y = 0; y < 32; y++) {
     grid[y] = [];
@@ -21,10 +18,6 @@ function setup() {
       grid[y][x] = "/";
     }
   }
-
-  ////墨水屏效果 ink paper effect
-  // petCanvas.pixelDensity(1);
-  // pixelDensity(1);
 }
 
 function draw() {
@@ -53,14 +46,14 @@ function draw() {
       let cell = grid[y][x];
 
       if (cell === "pixel" || cell === 4) {
-        fill(40, 48, 35, 255); noStroke();
-        drawingContext.shadowColor = "rgba(40,48,35,0.60)";
+        fill(...themeInkRGB(), 255); noStroke();
+        drawingContext.shadowColor = themeInk(0.6);
         drawingContext.shadowOffsetX = 2; drawingContext.shadowOffsetY = 2; drawingContext.shadowBlur = 0;
         rect(x * cellSize, y * cellSize, cellSize, cellSize);
         drawingContext.shadowColor = "rgba(0,0,0,0)";
       } else if (pixelAlpha[cell] !== undefined) {
-        fill(40, 48, 35, pixelAlpha[cell]); noStroke();
-        drawingContext.shadowColor = "rgba(40,48,35,0.60)";
+        fill(...themeInkRGB(), pixelAlpha[cell]); noStroke();
+        drawingContext.shadowColor = themeInk(0.6);
         drawingContext.shadowOffsetX = 2; drawingContext.shadowOffsetY = 2; drawingContext.shadowBlur = 0;
         rect(x * cellSize, y * cellSize, cellSize, cellSize);
         drawingContext.shadowColor = "rgba(0,0,0,0)";
@@ -68,9 +61,9 @@ function draw() {
         const ch = currentText.length > 1
           ? currentText[(textCellIdx[`${x},${y}`] ?? 0) % currentText.length]
           : currentText;
-        fill(40, 48, 35, 255);
+        fill(...themeInkRGB(), 255);
         textAlign(CENTER, CENTER); textSize(cellSize);
-        drawingContext.shadowColor = "rgba(40,48,35,0.60)";
+        drawingContext.shadowColor = themeInk(0.6);
         drawingContext.shadowOffsetX = 2; drawingContext.shadowOffsetY = 2; drawingContext.shadowBlur = 0;
         text(ch, x * cellSize + cellSize / 2, y * cellSize + cellSize / 2);
         drawingContext.shadowColor = "rgba(0,0,0,0)";
@@ -78,16 +71,16 @@ function draw() {
         const ch = currentText.length > 1
           ? currentText[(textCellIdx[`${x},${y}`] ?? 0) % currentText.length]
           : currentText;
-        fill(40, 48, 35, textAlpha[cell]);
+        fill(...themeInkRGB(), textAlpha[cell]);
         textAlign(CENTER, CENTER); textSize(cellSize);
-        drawingContext.shadowColor = "rgba(40,48,35,0.60)";
+        drawingContext.shadowColor = themeInk(0.6);
         drawingContext.shadowOffsetX = 2; drawingContext.shadowOffsetY = 2; drawingContext.shadowBlur = 0;
         text(ch, x * cellSize + cellSize / 2, y * cellSize + cellSize / 2);
         drawingContext.shadowColor = "rgba(0,0,0,0)";
       } else if (cell !== null && cell !== "/") {
-        fill(40, 48, 35, 255);
+        fill(...themeInkRGB(), 255);
         textAlign(CENTER, CENTER); textSize(cellSize);
-        drawingContext.shadowColor = "rgba(40,48,35,0.60)";
+        drawingContext.shadowColor = themeInk(0.6);
         drawingContext.shadowOffsetX = 2; drawingContext.shadowOffsetY = 2; drawingContext.shadowBlur = 0;
         text(cell, x * cellSize + cellSize / 2, y * cellSize + cellSize / 2);
         drawingContext.shadowColor = "rgba(0,0,0,0)";
@@ -95,7 +88,7 @@ function draw() {
     }
   }
   // 网格线（增加拓麻歌子 LCD 质感）
-  stroke(40, 48, 35, 22);
+  stroke(...themeInkRGB(), 22);
   strokeWeight(0.5);
   for (let i = 0; i <= 32; i++) {
     line(i * cellSize, 0, i * cellSize, height);
@@ -124,7 +117,6 @@ function setClear() {
       grid[y][x] = "/";
     }
   }
-  petCanvas.clear();
 }
 
 function setUndo() {
@@ -135,10 +127,17 @@ function setUndo() {
   }
 }
 
+// 这一笔是否从画框内开始：画框内 → 画图；画框外 → 让页面正常上下滑动
+let touchInCanvas = false;
+
 // Touch start: Reset current stroke data
 function touchStarted() {
   currentStroke = [];
   strokeCells = new Set();
+  touchInCanvas =
+    touches.length > 0 &&
+    touches[0].x >= 0 && touches[0].x <= width &&
+    touches[0].y >= 0 && touches[0].y <= height;
 }
 
 // Touch move: Modify cells based on tool type and record changes
@@ -147,6 +146,9 @@ function touchMoved() {
   if (!photoPage.classList.contains("active")) {
     return true;
   }
+
+  // 手指从画框外开始 → 不拦截，页面可以滚动
+  if (!touchInCanvas) return true;
 
   if (touches.length === 0) return;
 
@@ -221,48 +223,6 @@ function touchEnded() {
 
 function windowResized() {
   resizeCanvas((windowWidth * 4) / 5, (windowWidth * 4) / 5);
-}
-
-//generate data url from p5 canvas
-function generateAvatarUrl() {
-  const dataUrl = document
-    .querySelector("#p5-canvas-container canvas")
-    .toDataURL("image/png");
-  return dataUrl;
-
-  // const dataUrl = petCanvas.elt.toDataURL("image/png");
-  // console.log("Avatar URL:", dataUrl);
-  // return dataUrl;
-
-  // let exportCanvas = createGraphics(512, 512);
-  // exportCanvas.clear();
-
-  // let cellSize = 512 / 32;
-
-  // exportCanvas.textAlign(CENTER, CENTER);
-  // exportCanvas.textSize(cellSize);
-  // exportCanvas.fill(0);
-  // exportCanvas.noStroke();
-
-  // for (let y = 0; y < 32; y++) {
-  //   for (let x = 0; x < 32; x++) {
-  //     let cell = grid[y][x];
-
-  //     if (cell !== null) {
-  //       if (cell === "pixel" && currentText !== "") {
-  //         cell = currentText;
-  //       }
-
-  //       exportCanvas.text(
-  //         cell,
-  //         x * cellSize + cellSize / 2,
-  //         y * cellSize + cellSize / 2,
-  //       );
-  //     }
-  //   }
-  // }
-
-  // return exportCanvas.elt.toDataURL("image/png");
 }
 
 // draw text on canvas based on currentText and update grid state

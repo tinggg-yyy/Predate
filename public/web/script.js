@@ -1,32 +1,13 @@
-const socket = io();
+const socket = io({ path: PREDATE_BASE + "/socket.io" });
 
 let ranking = [];
 let currentIdx = 0;
 let cycleTimer = null;
 
-function getHoroscope(dateStr) {
-  if (!dateStr) return "";
-  const d = new Date(dateStr);
-  if (isNaN(d)) return "";
-  const m = d.getMonth() + 1, day = d.getDate();
-  if ((m === 12 && day >= 22) || (m === 1 && day <= 19))  return "摩羯座 / Capricorn";
-  if ((m === 1 && day >= 20) || (m === 2 && day <= 18))   return "水瓶座 / Aquarius";
-  if ((m === 2 && day >= 19) || (m === 3 && day <= 20))   return "双鱼座 / Pisces";
-  if ((m === 3 && day >= 21) || (m === 4 && day <= 19))   return "白羊座 / Aries";
-  if ((m === 4 && day >= 20) || (m === 5 && day <= 20))   return "金牛座 / Taurus";
-  if ((m === 5 && day >= 21) || (m === 6 && day <= 21))   return "双子座 / Gemini";
-  if ((m === 6 && day >= 22) || (m === 7 && day <= 22))   return "巨蟹座 / Cancer";
-  if ((m === 7 && day >= 23) || (m === 8 && day <= 22))   return "狮子座 / Leo";
-  if ((m === 8 && day >= 23) || (m === 9 && day <= 22))   return "处女座 / Virgo";
-  if ((m === 9 && day >= 23) || (m === 10 && day <= 23))  return "天秤座 / Libra";
-  if ((m === 10 && day >= 24) || (m === 11 && day <= 21)) return "天蝎座 / Scorpio";
-  return "射手座 / Sagittarius";
-}
+// ── 像素 emoji（大屏用的大号版本；app 用 shared 里的小号 getPixelHeartUrl）──
 
-// ── 像素 emoji ────────────────────────────────────────
-
-function getPixelHeartUrl() {
-  if (getPixelHeartUrl._cache) return getPixelHeartUrl._cache;
+function webHeartUrl() {
+  if (webHeartUrl._cache) return webHeartUrl._cache;
   const pattern = [
     [0,1,1,0,1,1,0],
     [1,1,1,1,1,1,1],
@@ -45,12 +26,12 @@ function getPixelHeartUrl() {
   ctx.shadowBlur = 0;
   ctx.fillStyle = "rgb(40,48,35)";
   pattern.forEach((row, ry) => row.forEach((v, rx) => { if (v) ctx.fillRect(rx*px, ry*px, px, px); }));
-  getPixelHeartUrl._cache = c.toDataURL();
-  return getPixelHeartUrl._cache;
+  webHeartUrl._cache = c.toDataURL();
+  return webHeartUrl._cache;
 }
 
-function getPixelVomitUrl() {
-  if (getPixelVomitUrl._cache) return getPixelVomitUrl._cache;
+function webVomitUrl() {
+  if (webVomitUrl._cache) return webVomitUrl._cache;
   const pattern = [
     [0,1,1,1,1,1,0],
     [1,0,1,0,1,0,1],
@@ -72,15 +53,20 @@ function getPixelVomitUrl() {
   ctx.shadowBlur = 0;
   ctx.fillStyle = "rgb(40,48,35)";
   pattern.forEach((row, ry) => row.forEach((v, rx) => { if (v) ctx.fillRect(rx*px, ry*px, px, px); }));
-  getPixelVomitUrl._cache = c.toDataURL();
-  return getPixelVomitUrl._cache;
+  webVomitUrl._cache = c.toDataURL();
+  return webVomitUrl._cache;
 }
 
 // ── 加载并展示排行 ──────────────────────────────────────
 
+// 完整档案缓存（username → 档案）。只在打开页面时下载一次全部档案，
+// 之后每 10 秒只拉轻量的 /profiles/activity（like / skip / 印象 / 分数），新进前十的人再单独取完整档案
+const _full = new Map();
+
 async function loadRanking() {
-  const res = await fetch("/profiles");
+  const res = await fetch(PREDATE_BASE + "/profiles");
   const data = await res.json();
+  data.forEach((p) => _full.set(p.username, p));
 
   const calcScore = (p) => Math.max(0, (p.score ?? 60) - (p.skips?.length || 0));
 
@@ -101,94 +87,24 @@ async function loadRanking() {
 function showSpotlight(idx) {
   currentIdx = idx;
   const p = ranking[idx];
+  // 每一栏的内容和 app 档案卡一模一样：都来自 shared/card-data.js 的 cardValues
+  // 大屏：整栏的内容都放在一行（一行中文 + 一行英文），不像 app 那样分排
+  const c = cardValues(p, { perRow: Infinity });
 
-  const v = (val) => val || "—";
+  // 一栏的值：「中文 / English」拆成中文一行 + 英文一行（fmtBI 已经转义过用户输入）
+  const val = (text) => `<span class="value">${fmtBI(text)}</span>`;
+  const cell = (zh, en, field, text, extra = "") =>
+    `<div class="cell ${extra}" data-field="${field}"><span class="label">${zh}${en ? `<br><small>${en}</small>` : ""}</span>${val(text)}</div>`;
+  // 整栏（领地、车辆、爱好、家庭…）：全部放一行中文 + 一行英文
+  const section = (zh, en, field, text) =>
+    `<div class="section" data-field="${field}"><span class="label">${zh} <small>${en}</small></span>${val(String(text).replace(/\n/g, " · "))}</div>`;
+  const row = (cells) => `<div class="grid-${cells.length}">${cells.join("")}</div>`;
 
-  // Chinese-only: strip everything after the first " / " or "/"
-  const zh = (val) => {
-    if (!val || val === "—") return val || "—";
-    if (val.includes(" / ")) return val.split(" / ")[0].trim();
-    if (val.includes("/")) return val.split("/")[0].trim();
-    return val;
-  };
-
-  function displayTerritory(hukou) {
-    if (!hukou) return "—";
-    if (!hukou.includes(" · ")) return displayBilingual(hukou);
-    const parts = hukou.split(" · ");
-    const zh = parts.map(p => p.split(" / ")[0].trim()).join("  ");
-    const en = parts.map(p => { const s = p.split(" / "); return s.length > 1 ? s[1].trim() : ""; }).filter(Boolean).join("  ");
-    return en ? `${zh}<br><small>${en}</small>` : zh;
-  }
-
-  function displayBilingual(val) {
-    if (!val) return "—";
-    if (val.includes(" · ")) {
-      const parts = val.split(" · ");
-      const zh = parts.map(p => p.split(" / ")[0].trim()).join("  ");
-      const en = parts.map(p => { const s = p.split(" / "); return s.length > 1 ? s.slice(1).join(" / ").trim() : ""; }).filter(Boolean).join("  ");
-      return en ? `${zh}<br><small>${en}</small>` : zh;
-    }
-    if (val.includes("/")) {
-      const idx = val.indexOf("/");
-      const zh = val.substring(0, idx).trim();
-      const en = val.substring(idx + 1).replace(/·/g, "  ").trim();
-      if (zh.length + en.length > 14) return `${zh}<br><small>${en}</small>`;
-      return `${zh} ${en}`;
-    }
-    return val;
-  }
-
-  const baseScore = p.score ?? 60;
-  const skipCount = p.skips ? p.skips.length : 0;
-  const displayScore = Math.max(0, baseScore - skipCount);
-  const _sd = p.date ? new Date(p.date) : null;
-  const stampDate = _sd
-    ? `${_sd.getFullYear()}.${String(_sd.getMonth()+1).padStart(2,"0")}.${String(_sd.getDate()).padStart(2,"0")}`
-    : "";
-  const stampColorClass = displayScore < 60 ? "stamp-red" : "";
-
-  const avatarHTML = p.grid
-    ? `<img class="avatar" src="${renderGridAsAvatar(p.grid, p.gridText)}" alt="${p.name}" />`
-    : `<div class="avatar-placeholder">${getEmoji(p.breed)}</div>`;
-
-  function breedOnly(val) {
-    if (!val) return null;
-    const parts = val.split(" · ");
-    const species = parts.length > 1 ? parts.slice(1).join(" · ") : parts[0];
-    return displayBilingual(species);
-  }
-
-  function breedZhEn(val) {
-    if (!val) return { zh: "", en: "" };
-    const parts = val.split(" · ");
-    const species = parts.length > 1 ? parts.slice(1).join(" · ") : parts[0];
-    const segs = species.split(" / ");
-    return { zh: segs[0].trim(), en: segs[1]?.trim() || "" };
-  }
-
-  const breedDisplay = p.mixed && p.breed2
-    ? (() => {
-        const a = breedZhEn(p.breed);
-        const b = breedZhEn(p.breed2);
-        const zh = `${a.zh} × ${b.zh}`;
-        const en = [a.en, b.en].filter(Boolean).join(" × ");
-        return en ? `${zh}<br><small>${en}</small>` : zh;
-      })()
-    : breedOnly(p.breed);
-
-  const likesCount = p.likes?.length || 0;
-  const skipsCount = p.skips?.length || 0;
-  const heartImg = getPixelHeartUrl();
-  const vomitImg = getPixelVomitUrl();
-  const heartsHTML = likesCount === 0
-    ? '<span class="stat-empty">—</span>'
-    : Array(Math.min(likesCount, 60)).fill(`<img src="${heartImg}" class="pixel-emoji">`).join("");
-  const skipsHTML = skipsCount === 0
-    ? '<span class="stat-empty">—</span>'
-    : Array(Math.min(skipsCount, 60)).fill(`<img src="${vomitImg}" class="pixel-emoji pixel-emoji-skip">`).join("");
-
-  const rel = p.relationship || {};
+  const stampColorClass = c.score < 60 ? "stamp-red" : "";
+  const heartImg = webHeartUrl();
+  const vomitImg = webVomitUrl();
+  const pixels = (n, img, cls) =>
+    n === 0 ? '<span class="stat-empty">—</span>' : Array(Math.min(n, 60)).fill(`<img src="${img}" class="${cls}">`).join("");
 
   document.getElementById("spotlight").innerHTML = `
     <div class="s-rank-bar">
@@ -196,122 +112,43 @@ function showSpotlight(idx) {
     </div>
 
     <div class="profile-score-stamp ${stampColorClass}">
-      <span class="stamp-date">${stampDate}</span>
-      <span class="stamp-num">${displayScore}</span>
+      <span class="stamp-date">${c.stampDate}</span>
+      <span class="stamp-num">${c.score}</span>
       <span class="stamp-lines"><span></span><span></span></span>
     </div>
 
     <div class="avatar-row">
       <div class="avatar-meta-left">
-        <div class="avatar-name-display">${v(p.name)}</div>
-        <div class="avatar-breed-display">${breedDisplay}</div>
+        <div class="avatar-name-display">${escapeHtml(c.name || "—")}</div>
+        <div class="avatar-breed-display">${fmtBI(c.breed)}</div>
       </div>
       <div class="avatar-wrap">
-        ${avatarHTML}
+        <!-- 总资产等级写在头像上方 -->
+        <div class="avatar-assets" data-field="assets">${escapeHtml(c.assets)}</div>
+        <img class="avatar" src="${c.avatar}" alt="${escapeHtml(c.name || "")}" />
       </div>
       <div class="avatar-stats-right">
-        <div class="avatar-stats-likes">${heartsHTML}</div>
-        <div class="avatar-stats-skips">${skipsHTML}</div>
+        <div class="avatar-stats-likes">${pixels(c.likes, heartImg, "pixel-emoji")}</div>
+        <div class="avatar-stats-skips">${pixels(c.skips, vomitImg, "pixel-emoji pixel-emoji-skip")}</div>
       </div>
     </div>
 
     <div class="card">
-      <div class="grid-3">
-        <div class="cell" data-field="gender"><span class="label">性别<br><small>Gender</small></span><span class="value">${displayBilingual(p.gender)}</span></div>
-        <div class="cell" data-field="age"><span class="label">年龄<br><small>Age</small></span><span class="value">${v(p.age)}</span></div>
-        <div class="cell" data-field="height"><span class="label">身高<br><small>Height</small></span><span class="value">${v(p.height)}</span></div>
-      </div>
+      ${row([cell("性别", "Gender", "gender", c.gender), cell("年龄", "Age", "age", c.age), cell("身高", "Height", "height", c.height)])}
+      ${row([cell("性取向", "Orientation", "orientation", c.orientation), cell("婚恋", "Status", "sterilized", c.status)])}
+      ${c.ships ? section("其他关系", "Other Ships", "ships", c.ships) : ""}
+      ${row([cell("MBTI", "", "mbti", c.mbti), cell("星座", "Horoscope", "horoscope", c.horoscope)])}
 
-      <div class="grid-2">
-        <div class="cell" data-field="orientation"><span class="label">性取向<br><small>Orientation</small></span><span class="value">${displayBilingual(p.orientation)}</span></div>
-        <div class="cell" data-field="sterilized"><span class="label">婚育状况<br><small>Status</small></span><span class="value">${displayBilingual(p.sterilized || rel.status)}</span></div>
-      </div>
+      ${section("领地", "Territory", "hukou", c.territory)}
+      ${section("车辆", "Vehicles", "vehicle", c.vehicle)}
 
-      <div class="grid-2">
-        <div class="cell" data-field="mbti"><span class="label">MBTI</span><span class="value">${v(p.mbti)}</span></div>
-        <div class="cell" data-field="horoscope"><span class="label">星座<br><small>Horoscope</small></span><span class="value">${displayBilingual(p.horoscope || getHoroscope(p.birth))}</span></div>
-      </div>
+      ${row([cell("学历", "Education", "edu", c.edu, "cell-sm"), cell("职业", "Job", "occupation", c.occupation, "cell-sm"), cell("月收入", "Income", "income", c.income, "cell-sm")])}
+      ${row([cell("目的", "Here For", "datingPurpose", c.datingPurpose, "cell-sm"), cell("期望关系", "Looking For", "relationshipGoal", c.relationshipGoal, "cell-sm")])}
+      ${c.relRows.map((r) => row(r.map(([zh, en, key, text]) => cell(zh, en, key, text, "cell-sm")))).join("")}
 
-      <div class="row-2x">
-        <div class="section" data-field="hukou">
-          <span class="label">领地 <small>Territory</small></span>
-          <span class="value">${displayTerritory(p.hukou)}</span>
-        </div>
-        <div class="section" data-field="vehicle">
-          <span class="label">车辆 <small>Vehicles</small></span>
-          <span class="value">${displayBilingual([
-            p.vehicle?.types?.length ? p.vehicle.types.join(' ') : null,
-            p.vehicle?.model || null,
-            p.vehicle?.count || null,
-            p.vehicle?.price || null,
-          ].filter(Boolean).join(' ') || '—')}</span>
-        </div>
-      </div>
-
-      <div class="grid-3">
-        <div class="cell cell-sm" data-field="edu"><span class="label">学历<br><small>Education</small></span><span class="value">${displayBilingual(p.edu)}</span></div>
-        <div class="cell cell-sm" data-field="occupation"><span class="label">职业<br><small>Job</small></span><span class="value">${displayBilingual(p.occupation)}</span></div>
-        <div class="cell cell-sm" data-field="income"><span class="label">月收入<br><small>Income</small></span><span class="value">${displayBilingual(p.income)}</span></div>
-      </div>
-
-      <div class="grid-2">
-        <div class="cell cell-sm" data-field="datingPurpose"><span class="label">来这里的目的<br><small>Here For</small></span><span class="value">${displayBilingual(rel.datingPurpose)}</span></div>
-        <div class="cell cell-sm" data-field="relationshipGoal"><span class="label">期望关系<br><small>Looking For</small></span><span class="value">${displayBilingual(rel.relationshipGoal)}</span></div>
-      </div>
-
-      <div class="grid-3">
-        <div class="cell cell-sm" data-field="currentPartner"><span class="label">目前伴侣<br><small>Partner</small></span><span class="value">${displayBilingual(rel.currentPartner)}</span></div>
-        <div class="cell cell-sm" data-field="partnerCount"><span class="label">伴侣数量<br><small># Partners</small></span><span class="value">${displayBilingual(rel.partnerCount)}</span></div>
-        <div class="cell cell-sm" data-field="kids"><span class="label">子女<br><small>Kids</small></span><span class="value">${displayBilingual(rel.kids)}</span></div>
-      </div>
-
-      <div class="grid-3">
-        <div class="cell cell-sm" data-field="crush"><span class="label">暗恋<br><small>Crush</small></span><span class="value">${displayBilingual(rel.crush)}</span></div>
-        <div class="cell cell-sm" data-field="ambiguous"><span class="label">暧昧<br><small>Ambiguous</small></span><span class="value">${displayBilingual(rel.ambiguous)}</span></div>
-        <div class="cell cell-sm" data-field="secretPartner"><span class="label">秘密伴侣<br><small>Secret</small></span><span class="value">${displayBilingual(rel.secretPartner)}</span></div>
-      </div>
-
-      <div class="grid-3">
-        <div class="cell cell-sm" data-field="foreignPartner"><span class="label">境外伴侣<br><small>Foreign</small></span><span class="value">${displayBilingual(rel.foreignPartner)}</span></div>
-        <div class="cell cell-sm" data-field="otherCityPartner"><span class="label">异地伴侣<br><small>Long Dist</small></span><span class="value">${displayBilingual(rel.otherCityPartner)}</span></div>
-        <div class="cell cell-sm" data-field="whiteMoonlight"><span class="label">白月光<br><small>Moonlight</small></span><span class="value">${displayBilingual(rel.whiteMoonlight)}</span></div>
-      </div>
-
-      <div class="grid-3">
-        <div class="cell cell-sm" data-field="pastRelCount"><span class="label">谈过<br><small>Past Rels</small></span><span class="value">${displayBilingual(rel.pastRelCount)}</span></div>
-        <div class="cell cell-sm" data-field="exContact"><span class="label">前任联系<br><small>Ex Contact</small></span><span class="value">${displayBilingual(rel.exContact)}</span></div>
-        <div class="cell cell-sm" data-field="stillLoveEx"><span class="label">还爱前任<br><small>Still Love Ex</small></span><span class="value">${displayBilingual(rel.stillLoveEx)}</span></div>
-      </div>
-
-      <div class="section" data-field="hobby">
-        <span class="label">兴趣爱好 <small>Hobbies</small></span>
-        <span class="value">${displayBilingual(v(p.hobby))}</span>
-      </div>
-
-      <div class="section" data-field="parents">
-        <span class="label">家庭状况 <small>Family</small></span>
-        <span class="value">${displayBilingual([
-          p.parents?.status || null,
-          p.parents?.relationship || null,
-          p.parents?.fatherOrigin ? '父(Dad) ' + p.parents.fatherOrigin : null,
-          p.parents?.motherOrigin ? '母(Mom) ' + p.parents.motherOrigin : null,
-          (() => {
-            const cnt = p.parents?.siblingCount;
-            if (!cnt) return null;
-            if (cnt === "独生/Only Child") return "独生 / Only Child";
-            const wMap = {"经济困难":"Struggling","普通":"Average","小康":"Comfortable","富裕":"Wealthy","富裕✨":"Very Wealthy ✨"};
-            const w = p.parents?.siblingWealth;
-            const wEn = wMap[w] || "";
-            const cntEn = cnt.split("/")[1] || "";
-            return w ? `${cnt.split("/")[0]} / ${cntEn} · ${w} / ${wEn}` : `${cnt.split("/")[0]} / ${cntEn}`;
-          })(),
-        ].filter(Boolean).join(' · ') || '—')}</span>
-      </div>
-
-      ${p.standards ? `<div class="section" data-field="standards">
-        <span class="label">择偶标准 <small>Looking For</small></span>
-        <span class="value">${displayBilingual(p.standards)}</span>
-      </div>` : ""}
+      ${section("兴趣爱好", "Hobbies", "hobby", c.hobby)}
+      ${section("家庭状况", "Family", "parents", c.family)}
+      ${c.standards ? section("择偶标准", "Looking For", "standards", c.standards) : ""}
     </div>
   `;
 
@@ -372,8 +209,19 @@ const _prevCounts = {}; // username -> { likes, skips, interps }
 
 async function refreshRanking(thenShowUsername) {
   try {
-    const res = await fetch("/profiles");
-    const data = await res.json();
+    const res = await fetch(PREDATE_BASE + "/profiles/activity");
+    const activity = await res.json();
+
+    // 新出现的人（比如刚注册）先取完整档案；已有的人把最新的 like / skip / 印象合进缓存
+    await Promise.all(activity.filter((a) => !_full.has(a.username)).map(async (a) => {
+      const r = await fetch(`${PREDATE_BASE}/profiles/${encodeURIComponent(a.username)}`);
+      if (r.ok) _full.set(a.username, await r.json());
+    }));
+    activity.forEach((a) => {
+      const p = _full.get(a.username);
+      if (p) Object.assign(p, a);
+    });
+    const data = activity.map((a) => _full.get(a.username)).filter(Boolean);
 
     const newRanking = data
       .filter((p) => p.name)
@@ -603,7 +451,7 @@ function _rnd(arr) { return arr[Math.floor(Math.random() * arr.length)]; }
 function _extractTags(p) {
   const tags = [];
   if (p.hobby) {
-    p.hobby.split(/[,，、\s]+/).filter(Boolean).forEach((t) => tags.push(t.trim()));
+    p.hobby.split(/\s*·\s*/).filter(Boolean).forEach((t) => tags.push(t.split("/")[0].trim()));
   }
   if (p.mbti) tags.push(`MBTI ${p.mbti}`);
   if (p.breed) tags.push(p.breed.split(" · ").pop().split(" / ")[0].trim());
@@ -753,7 +601,7 @@ function generateTickerMessages(profiles) {
     });
 
     if (p.hobby) {
-      const hobbyTag = p.hobby.split(/[,，、\s]+/)[0];
+      const hobbyTag = p.hobby.split(/\s*·\s*/)[0].split("/")[0].trim();
       msgs.push({
         text: `${hobbyTag}的「${name}」在线求偶中 seeking connection`,
         type: "info",
@@ -812,7 +660,7 @@ function initTicker(profiles) {
   // Duplicate for seamless loop
   const full = [...msgs, ...msgs];
   track.innerHTML = full
-    .map((m) => `<span class="ticker-item ticker-item-${m.type}">${m.text}</span>`)
+    .map((m) => `<span class="ticker-item ticker-item-${m.type}">${escapeHtml(m.text)}</span>`)
     .join('<span class="ticker-sep">  </span>');
 
   // Calculate scroll duration based on content length
@@ -849,7 +697,7 @@ socket.on("like-event", (data) => {
       if (ranking[currentIdx]?.name === data.name) {
         const box = document.querySelector(".avatar-stats-likes");
         if (box) {
-          const h = getPixelHeartUrl();
+          const h = webHeartUrl();
           box.innerHTML = data.likesCount === 0
             ? '<span class="stat-empty">—</span>'
             : Array(Math.min(data.likesCount, 60)).fill(`<img src="${h}" class="pixel-emoji">`).join("");
@@ -950,84 +798,6 @@ socket.on("interpretation-agree-event", (data) => {
 
   bubble.style.fontSize = 44 + data.agrees * 10 + 'px';
 });
-
-// ── 工具函数 ──────────────────────────────────────────
-
-function getEmoji(breed) {
-  if (!breed) return "?";
-  const b = breed.toLowerCase();
-  if (b.includes("dog") || b.includes("狗")) return "DOG";
-  if (b.includes("cat") || b.includes("猫")) return "CAT";
-  if (b.includes("rabbit") || b.includes("兔")) return "BUNNY";
-  if (b.includes("fox") || b.includes("狐")) return "FOX";
-  if (b.includes("wolf") || b.includes("狼")) return "WOLF";
-  if (b.includes("bear") || b.includes("熊")) return "BEAR";
-  if (b.includes("bird") || b.includes("鸟")) return "BIRD";
-  if (b.includes("dragon") || b.includes("龙")) return "DRAGON";
-  return breed.split(/[\s·\/]/)[0].slice(0, 6).toUpperCase();
-}
-
-// ── Grid 渲染 ─────────────────────────────────────────
-
-const CELL_ALPHA_WEB = { 1: 0.25, 2: 0.49, 3: 0.75, 4: 1, "pixel": 1, "text": 1, "#": 1,
-  "#1": 0.25, "#2": 0.49, "#3": 0.75, "#4": 1 };
-
-function cellAlphaWeb(cell) {
-  if (Array.isArray(cell)) return cell[1];
-  return CELL_ALPHA_WEB[cell] ?? 1;
-}
-
-function renderGridAsAvatar(grid, gridText) {
-  const canvas = document.createElement("canvas");
-  const size = 840;
-  canvas.width = size;
-  canvas.height = size;
-  const ctx = canvas.getContext("2d");
-
-  ctx.fillStyle = "#a9b0a2";
-  ctx.fillRect(0, 0, size, size);
-
-  const cellSize = size / 32;
-  ctx.textAlign = "center";
-  ctx.textBaseline = "middle";
-  ctx.font = `${cellSize}px monospace`;
-
-  ctx.shadowColor = "rgba(40,56,24,0.60)";
-  ctx.shadowOffsetX = 2;
-  ctx.shadowOffsetY = 2;
-  ctx.shadowBlur = 0;
-
-  for (let y = 0; y < 32; y++) {
-    for (let x = 0; x < 32; x++) {
-      const cell = grid[y][x];
-      if (cell === null || cell === "/") continue;
-
-      if (Array.isArray(cell)) {
-        ctx.fillStyle = `rgba(40,56,24,${cell[1]})`;
-        ctx.fillText(cell[0], x * cellSize + cellSize / 2, y * cellSize + cellSize / 2);
-      } else if (cell === "pixel") {
-        ctx.fillStyle = "rgb(40, 56, 24)";
-        ctx.fillRect(x * cellSize, y * cellSize, cellSize, cellSize);
-      } else if (typeof cell === "string" && cell.startsWith("#")) {
-        const alpha = CELL_ALPHA_WEB[cell] ?? 1;
-        ctx.fillStyle = `rgba(40,56,24,${alpha})`;
-        ctx.fillText(gridText || "", x * cellSize + cellSize / 2, y * cellSize + cellSize / 2);
-      } else if (cell === "text") {
-        ctx.fillStyle = "rgb(40, 56, 24)";
-        ctx.fillText(gridText || "", x * cellSize + cellSize / 2, y * cellSize + cellSize / 2);
-      } else if (typeof cell === "number") {
-        const alpha = CELL_ALPHA_WEB[cell] ?? 1;
-        ctx.fillStyle = `rgba(40,56,24,${alpha})`;
-        ctx.fillRect(x * cellSize, y * cellSize, cellSize, cellSize);
-      } else {
-        ctx.fillStyle = "rgb(40, 56, 24)";
-        ctx.fillText(cell, x * cellSize + cellSize / 2, y * cellSize + cellSize / 2);
-      }
-    }
-  }
-
-  return canvas.toDataURL();
-}
 
 // ── 启动 ─────────────────────────────────────────────
 

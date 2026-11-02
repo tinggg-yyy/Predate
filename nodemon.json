@@ -1,0 +1,14 @@
+{
+  "ignore": [
+    "profiles.json",
+    "profiles.backup-*.json",
+    "messages.json",
+    "custom-hobbies.json",
+    "custom-breeds.json",
+    "public/*",
+    "custom-hobbies.backup-*.json",
+    "sessions.json",
+    "admin.json",
+    "custom-options.json"
+  ]
+}
