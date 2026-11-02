@@ -1,12 +1,28 @@
 {
   "name": "PREDATE",
+  "short_name": "PREDATE",
+  "start_url": "app/",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#a9b0a2",
+  "theme_color": "#a9b0a2",
   "icons": [
     {
-      "src": "assets/icon.png",
+      "src": "assets/icon-192.png",
+      "type": "image/png",
+      "sizes": "192x192"
+    },
+    {
+      "src": "assets/icon-512.png",
       "type": "image/png",
       "sizes": "512x512"
+    },
+    {
+      "src": "assets/icon-maskable-512.png",
+      "type": "image/png",
+      "sizes": "512x512",
+      "purpose": "maskable"
     }
-  ],
-  "orientation": "Natural",
-  "display": "standalone"
+  ]
 }
