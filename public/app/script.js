@@ -20,11 +20,16 @@ function _clearSession() {
   } catch (_) {}
 }
 
+// 教学的状态（教学代码在后面，这里先声明：api() 一加载就会被调用，要用到它）
+let _tut = { active: false, step: null, agrees: 0, raf: 0 };
+
 // 所有请求都走这里：自动带上令牌。令牌失效（401）时提示重新登录
 let _authExpiredShown = false;
 function api(url, opts = {}) {
   const headers = { ...(opts.headers || {}) };
   if (_authToken) headers.Authorization = `Bearer ${_authToken}`;
+  const fake = _tutFakeResponse(url, opts);
+  if (fake) return fake;
   return fetch(url.startsWith("/") ? PREDATE_BASE + url : url, { ...opts, headers }).then((res) => {
     if (res.status === 401 && !/^\/(login|me)\b/.test(url) && currentUser && !_authExpiredShown) {
       _authExpiredShown = true;
@@ -44,11 +49,14 @@ function _acceptLogin(data) {
   currentUser = profile;
 }
 
+// 临时：测试新教学用，老用户登录后也先走一遍教学。测完改回 false
+const _TUT_EVERY_LOGIN = true;
+
 // 登录后进入浏览页（老用户跳过教学）
 function _enterAfterLogin() {
   checkNotifications();
   startMessagePolling();
-  createSwipeCard({ skipOnboarding: true });
+  createSwipeCard({ skipOnboarding: !_TUT_EVERY_LOGIN });
 }
 
 // 打开 app 时：浏览器记着令牌就直接登录
@@ -3450,13 +3458,12 @@ function createSwipeCard({ skipOnboarding = false } = {}) {
       showProfile();
       goTo("swipe-page");
       if (skipOnboarding) {
-        // 老用户：不显示教学，直接启动 obFinish 里的后续流程
-        document.getElementById("onboard-overlay")?.classList.add("hidden");
+        // 老用户：不显示教学，直接开始骚扰消息这些
         startSwipeInterrupts();
         startGenderedNotifications();
         if (!popupShowing) showNextPopup();
       } else {
-        startOnboarding();
+        startTutorial();
       }
       _startProfileDataRefresh();
     });
@@ -3843,246 +3850,274 @@ function closeHobbyCatPicker() {
   _pendingCustomInputId = null;
 }
 
-// ── Onboarding overlays ────────────────────────────────────────
-let _obLongTimer = null;
-let _obLongText = "";
-let _obAgreeCount = 0;
-let _obSampleGrid = null;
-const _OB_AGREE_MIN = 3;
+// ── 教学：在真正的浏览页上，用一份示范档案把所有功能走一遍 ──────────
+// 整个页面盖一层半透明的「纸」，只挖空现在要按的地方，提示写在纸上。
+// 示范档案只存在本地：教学里的解读 / 赞同 / 印象 / 喜欢都不会发到服务器（api() 里拦下）。
+const TUT_USER = "__tutorial__";
+const TUT_FIELD = "mbti"; // 教长按 / 短按用的那一栏（换栏的话，下面提示里的「MBTI」也要跟着改）
 
-function obGlitch(el) {
-  if (!el) return;
-  el.classList.remove("ob-glitch");
-  void el.offsetWidth;
-  el.classList.add("ob-glitch");
-  setTimeout(() => el.classList.remove("ob-glitch"), 450);
-}
-
-function obFlash(cb) {
-  const fl = document.getElementById("ob-flash");
-  if (!fl) {
-    cb();
-    return;
-  }
-  fl.classList.add("active");
-  setTimeout(() => {
-    fl.classList.remove("active");
-    cb();
-  }, 380);
-}
-
-function startOnboarding() {
-  const overlay = document.getElementById("onboard-overlay");
-  if (!overlay) return;
-  _obLongText = "";
-  _obAgreeCount = 0;
-  overlay.classList.remove("hidden");
-  _obInitStep1();
-}
-
-function obNextStep(num) {
-  obFlash(() => {
-    document
-      .querySelectorAll(".ob-step")
-      .forEach((s) => s.classList.remove("active"));
-    const next = document.getElementById(`ob-step-${num}`);
-    if (next) next.classList.add("active");
-    if (num === 2) _obInitStep2();
-    if (num === 3) _obInitStep3();
-  });
-}
-
-function obFinish() {
-  obFlash(() => {
-    document.getElementById("onboard-overlay").classList.add("hidden");
-    startSwipeInterrupts();
-    startGenderedNotifications();
-    if (!popupShowing) showNextPopup();
-  });
-}
-
-// Step 1 — 长按: hold 500ms → input appears → submit → auto-jump step 2
-function _obInitStep1() {
-  const word = document.getElementById("ob-demo-long");
-  if (!word) return;
-
-  function onStart(e) {
-    e.preventDefault();
-    _obLongTimer = setTimeout(() => {
-      _obLongTimer = null;
-      obGlitch(word);
-      document.getElementById("ob-1-input").classList.remove("hidden");
-      const inp = document.getElementById("ob-1-text");
-      if (inp) {
-        inp.value = "";
-        inp.focus();
-      }
-    }, 500);
-  }
-  function onEnd() {
-    if (_obLongTimer) {
-      clearTimeout(_obLongTimer);
-      _obLongTimer = null;
-      obGlitch(word);
-    }
-  }
-  word.addEventListener("touchstart", onStart, { passive: false });
-  word.addEventListener("touchend", onEnd);
-  word.addEventListener("touchcancel", onEnd);
-  word.addEventListener("mousedown", onStart);
-  word.addEventListener("mouseup", onEnd);
-  document.getElementById("ob-1-text")?.addEventListener("keydown", (e) => {
-    if (e.key === "Enter") submitOb1();
-  });
-}
-
-function submitOb1() {
-  const text = (document.getElementById("ob-1-text")?.value || "").trim();
-  if (!text) return;
-  _obLongText = text;
-  obNextStep(2);
-}
-
-// Step 2 — 短按: tap word → red text stays + agree instruction appears
-//           tap red text 3x (grows) → auto-jump step 3
-function _obInitStep2() {
-  const word = document.getElementById("ob-demo-short");
-  const floatWord = document.getElementById("ob-float-word");
-  const agreeInstr = document.getElementById("ob-agree-instr");
-  if (!word || !floatWord) return;
-
-  word.addEventListener(
-    "click",
-    () => {
-      if (!floatWord.classList.contains("hidden")) return;
-      obGlitch(word);
-      floatWord.textContent = _obLongText;
-      floatWord.classList.remove("hidden");
-      agreeInstr?.classList.remove("hidden");
-      word.classList.add("ob-done");
-      floatWord.addEventListener("click", _obAgreeClick);
-    },
-    { once: true },
-  );
-}
-
-function _obAgreeClick() {
-  const fw = document.getElementById("ob-float-word");
-  const leftEl = document.getElementById("ob-agree-left");
-  if (!fw) return;
-  obGlitch(fw);
-  _obAgreeCount++;
-  fw.style.fontSize = 22 + _obAgreeCount * 10 + "px";
-  const left = Math.max(0, _OB_AGREE_MIN - _obAgreeCount);
-  if (leftEl) leftEl.textContent = left;
-  if (_obAgreeCount >= _OB_AGREE_MIN) {
-    fw.removeEventListener("click", _obAgreeClick);
-    setTimeout(() => obNextStep(3), 350);
-  }
-}
-
-// Step 3 — 印象: show pre-carved avatar → tap label → type → letters carve in → ✕ appears
-function _makeObSampleGrid() {
+// 示范档案的头像：一张用「好」字拼的笑脸
+function _tutDemoGrid() {
   const g = Array.from({ length: 32 }, () => Array(32).fill(null));
-  const cx = 16,
-    cy = 14;
-  // Fill face shape with "好" characters directly
   for (let y = 0; y < 32; y++) {
     for (let x = 0; x < 32; x++) {
-      const dx = x - cx,
-        dy = y - cy;
+      const dx = x - 16,
+        dy = y - 14;
       if (dx * dx + dy * dy <= 100) g[y][x] = "好";
     }
   }
-  // hollow eyes
-  [
-    [10, 12],
-    [10, 13],
-    [11, 12],
-    [11, 13],
-    [10, 18],
-    [10, 19],
-    [11, 18],
-    [11, 19],
-  ].forEach(([y, x]) => {
-    g[y][x] = null;
-  });
-  // smile
-  [
-    [17, 13],
-    [18, 14],
-    [18, 18],
-    [17, 19],
-  ].forEach(([y, x]) => {
-    g[y][x] = null;
-  });
-  // ears
-  [
-    [6, 11],
-    [7, 11],
-    [6, 12],
-    [6, 20],
-    [7, 20],
-    [6, 21],
-  ].forEach(([y, x]) => {
-    if (y < 32 && x < 32) g[y][x] = "好";
-  });
+  // 眼睛、嘴巴挖空
+  [[10, 12], [10, 13], [11, 12], [11, 13], [10, 18], [10, 19], [11, 18], [11, 19], [17, 13], [18, 14], [18, 18], [17, 19]].forEach(
+    ([y, x]) => (g[y][x] = null),
+  );
+  // 耳朵
+  [[6, 11], [7, 11], [6, 12], [6, 20], [7, 20], [6, 21]].forEach(([y, x]) => (g[y][x] = "好"));
   return g;
 }
 
-function _obInitStep3() {
-  _obSampleGrid = _makeObSampleGrid();
-  // Grid cells are already "好" characters — render directly
-  const img = document.getElementById("ob-avatar-img");
-  if (img) img.src = renderGridAsAvatar(_obSampleGrid, "好");
-
-  // Tap "印象" label to reveal input
-  const trigger = document.getElementById("ob-3-trigger");
-  const inputWrap = document.getElementById("ob-3-input");
-  if (trigger && inputWrap) {
-    trigger.addEventListener(
-      "click",
-      () => {
-        obGlitch(trigger);
-        trigger.classList.add("ob-done");
-        inputWrap.classList.remove("hidden");
-        document.getElementById("ob-3-text")?.focus();
-      },
-      { once: true },
-    );
-  }
-  document.getElementById("ob-3-text")?.addEventListener("keydown", (e) => {
-    if (e.key === "Enter") submitOb3();
-  });
+function _tutDemoProfile() {
+  return {
+    username: TUT_USER,
+    name: "教学兽",
+    breed: "鸟类 / Birds · 猫头鹰 / Owl",
+    height: "35",
+    gender: "雌/Female",
+    orientation: "泛性恋/Pansexual",
+    age: "3",
+    birth: "2023-04-01",
+    horoscope: "白羊座 / Aries",
+    hukou: "上海 / Shanghai 普通住宅",
+    house: { city: "上海", district: "", type: "普通住宅", area: "50-80", price: "", ownership: "", mortgage: "" },
+    vehicle: { types: [], model: "", count: "", price: "" },
+    parents: { status: "都健在", siblingCount: "", siblingWealth: "" },
+    relationship: { status: "单身/Single", datingPurpose: "好玩/Just for Fun", relationshipGoal: "随缘/Whatever" },
+    sterilized: "单身/Single",
+    mbti: "ENFP",
+    hobby: "夜行 / Night Roaming · 嗅探 / Sniffing",
+    standards: "专一 / Exclusive",
+    edu: "本科",
+    occupation: "猎物评估师 / Prey Assessor",
+    income: "8k-15k",
+    score: 100,
+    grid: _tutDemoGrid(),
+    gridText: "好",
+    likes: [],
+    skips: [],
+    // 别人已经写好的解读：短按时和你写的一起飘出来
+    interpretations: {
+      [TUT_FIELD]: [
+        { text: "太吵了", addedBy: "_", agrees: 2, agreedBy: {} },
+        { text: "e人退散", addedBy: "_", agrees: 0, agreedBy: {} },
+        { text: "快乐小狗", addedBy: "_", agrees: 1, agreedBy: {} },
+      ],
+    },
+  };
 }
 
-function submitOb3() {
-  const text = (document.getElementById("ob-3-text")?.value || "").trim();
-  if (!text) return;
-  const inp = document.getElementById("ob-3-text");
-  const btn = document.getElementById("ob-3-btn");
-  if (inp) inp.disabled = true;
-  if (btn) btn.disabled = true;
+// 每一步：target = 挖空的地方（没有就整张纸盖住）；open = 挖空处能不能按（不能按的步骤点纸上的 ▶ 继续）
+// popup = 正在开着真正的弹窗，纸先收起来，只在顶上留一条提示
+const _TUT_STEPS = {
+  intro: { zh: "恭喜你已经建立完自己的档案了\n是时候正式开始使用了\n跟随指示熟悉一下所有的功能吧", en: "Welcome to the real deal!\nFollow the little notes and see what you can do here.", next: "longpress" },
+  longpress: { target: () => _tutField(), open: true, zh: "长按「MBTI」\n来，说说你觉得这玩意儿是什么", en: "Hold down the MBTI.\nWhat's your take on this thing?" },
+  interpWrite: { popup: true, zh: "写下你的看法，毒舌一点也没关系～写完点确定", en: "Write what you think. Feel free to be a little mean. Tap OK when you're done." },
+  tap: { target: () => _tutField(), open: true, zh: "现在再点一下这里\n来看看别人的脑回路", en: "Now tap it again.\nLet's see what everyone else thinks." },
+  agree: { target: () => _tutBubbleArea(), open: true, zh: "谁说得有道理？点一下那句红字\n越多人认同，字就越大", en: "Someone make a good point? Tap their red words.\nThe more likes, the bigger they get." },
+  impressBtn: { target: () => _tutBtn(1), open: true, zh: "点中间亮着的按钮\n用一个词形容一下 ta", en: "Tap the glowing button.\nDescribe them in ONE word." },
+  impWrite: { popup: true, zh: "想好了吗？写下那个词，点确定\n它就会刻进 ta 的头像里", en: "Got a word? Type it in and hit OK.\nIt'll be carved into their avatar." },
+  impDone: { target: () => document.querySelector("#swipe-container .avatar-box"), zh: "看！你的评价已经刻上去了\n这下 ta 可跑不掉了", en: "Look! Your impression is carved in.\nNo taking it back now!", next: "skipInfo" },
+  skipInfo: { target: () => _tutBtn(2), zh: "不来电？点右边的叉叉\n不过得告诉我们为什么哦", en: "Not feeling it? Hit the X.\nBut first, tell us why.", next: "msgInfo" },
+  msgInfo: { target: () => document.getElementById("msg-notif-btn"), zh: "有人给你发消息啦？\n都在这里，别错过", en: "Got a message?\nYou'll find them all right here.", next: "rankInfo" },
+  rankInfo: { target: () => document.getElementById("rank-btn"), zh: "来看看排行榜\n今天谁是人气王？", en: "The leaderboard!\nWho's everyone's favorite today?", next: "meInfo" },
+  meInfo: { target: () => document.querySelector("#swipe-topbar > .nes-btn"), zh: "这里是「我」！\n改档案、切语言、换皮肤，或者重看教学", en: "Your little corner!\nEdit your profile, switch languages and themes, or replay this tutorial.", next: "likeBtn" },
+  likeBtn: { target: () => _tutBtn(0), open: true, zh: "心动了吗？\n点亮这颗爱心，冲！", en: "Feeling the spark?\nHit that heart!" },
+  warn: { popup: true, zh: "哎呀，系统觉得这段关系有点危险\n但你要是铁了心，就继续吧", en: "Uh-oh. The system sees a little red flag.\nStill wanna go for it? Be our guest." },
+  opener: { popup: true, zh: "选一句开场白，发给 ta！\n小心，有些话可是要扣分的", en: "Pick an opener and send it!\nCareful, some lines will cost you points." },
+  done: { zh: "好啦，教学结束！\n去看看你的下一位嘉宾吧", en: "And that's the tour!\nGo meet your next potential match. 👀", next: "finish", btn: ["开始", "Let's go"] },
+};
+// 进度编号只算纸上的步骤，不算弹窗里的提示
+const _TUT_ORDER = ["longpress", "tap", "agree", "impressBtn", "impDone", "skipInfo", "msgInfo", "rankInfo", "meInfo", "likeBtn"];
 
-  const gridCopy = _obSampleGrid.map((row) => [...row]);
-  _applyImpressionToGrid(gridCopy, text);
-  const img = document.getElementById("ob-avatar-img");
-  if (img) {
-    img.style.transition = "opacity 0.2s";
-    img.style.opacity = "0";
-    setTimeout(() => {
-      img.src = renderGridAsAvatar(gridCopy, text);
-      img.style.opacity = "1";
-    }, 200);
+const _tutField = () => document.querySelector(`#swipe-container .value[data-field="${TUT_FIELD}"]`);
+const _tutBtn = (i) => document.querySelectorAll("#swipe-page .swipebutton .nes-btn")[i];
+// 教学那一栏连同飘出来的红字一起框住
+function _tutBubbleArea() {
+  const span = _tutField();
+  if (!span) return null;
+  const els = [span, ...span.querySelectorAll(".interp-bubble")];
+  const rs = els.map((e) => e.getBoundingClientRect());
+  return {
+    left: Math.min(...rs.map((r) => r.left)),
+    top: Math.min(...rs.map((r) => r.top)),
+    right: Math.max(...rs.map((r) => r.right)),
+    bottom: Math.max(...rs.map((r) => r.bottom)),
+  };
+}
+
+function startTutorial() {
+  stopSwipeInterrupts();
+  const demo = _tutDemoProfile();
+  profiles.splice(currentIndex, 0, demo);
+  showProfile();
+  document.querySelector("#swipe-page .card-frame")?.scrollTo(0, 0);
+  _tut = { active: true, step: null, agrees: 0, raf: 0 };
+  // 已经弹出来的消息 / 「有人喜欢你」横幅先收起来，教学完再出来
+  _quietOverlayEnter();
+  document.getElementById("tut").classList.remove("hidden");
+  _tutGo("intro");
+  const loop = () => {
+    if (!_tut.active) return;
+    _tutLayout();
+    _tut.raf = requestAnimationFrame(loop);
+  };
+  loop();
+}
+
+// 从「我」里重看教学
+function replayTutorial() {
+  closeMePage();
+  startTutorial();
+}
+
+function _tutGo(step) {
+  if (step === "finish") return _tutFinish();
+  _tut.step = step;
+  const s = _TUT_STEPS[step];
+  const root = document.getElementById("tut");
+  root.dataset.mode = s.popup ? "popup" : s.target ? (s.open ? "open" : "look") : "full";
+  const n = _TUT_ORDER.indexOf(step);
+  document.getElementById("tut-progress").textContent = n >= 0 ? `${String(n + 1).padStart(2, "0")} / ${String(_TUT_ORDER.length).padStart(2, "0")}` : "";
+  document.getElementById("tut-text").innerHTML = biHtml(s.zh, s.en);
+  const next = document.getElementById("tut-next");
+  next.dataset.off = s.next ? "" : "1"; // .nes-btn 的 display 带 !important，用 CSS 属性选择器藏
+  next.innerHTML = biHtml(...(s.btn || [step === "intro" ? "开始" : "继续", step === "intro" ? "Start" : "Next"])) + " ▶";
+  // 要按的东西先滚到看得见的地方
+  const t = s.target?.();
+  if (t instanceof Element) t.scrollIntoView({ block: "center", behavior: "smooth" });
+}
+
+function tutNext() {
+  const s = _TUT_STEPS[_tut.step];
+  if (s?.next) _tutGo(s.next);
+}
+
+// 每一帧按目标现在的位置摆好四块纸和提示（卡片会滚动、红字会飘）
+function _tutLayout() {
+  const s = _TUT_STEPS[_tut.step];
+  const root = document.getElementById("tut");
+  const note = document.getElementById("tut-note");
+  // body 被刘海往下挪过，fixed 浮层以 body 为基准，所以坐标要减掉 body 的位置
+  const base = document.body.getBoundingClientRect();
+  const W = window.innerWidth,
+    H = window.innerHeight;
+  let t = s.target?.();
+  if (t instanceof Element) t = t.getBoundingClientRect();
+  const panes = ["t", "b", "l", "r"].map((k) => document.getElementById(`tut-${k}`));
+  const ring = document.getElementById("tut-ring");
+  const place = (el, x, y, w, h) => {
+    el.style.left = x - base.left + "px";
+    el.style.top = y - base.top + "px";
+    el.style.width = Math.max(0, w) + "px";
+    el.style.height = Math.max(0, h) + "px";
+  };
+
+  if (!t || s.popup) {
+    // 没有目标：整张纸盖满（弹窗步骤里纸由 CSS 收起来）
+    place(panes[0], 0, 0, W, H);
+    panes.slice(1).forEach((p) => place(p, 0, 0, 0, 0));
+    ring.style.display = "none";
+    if (s.popup) {
+      note.style.left = 12 - base.left + "px";
+      note.style.top = 12 - base.top + "px";
+    } else {
+      note.style.left = (W - note.offsetWidth) / 2 - base.left + "px";
+      note.style.top = (H - note.offsetHeight) / 2 - base.top + "px";
+    }
+    return;
   }
 
-  const closeBtn = document.getElementById("ob-close-3");
-  if (closeBtn) {
+  const pad = 6;
+  const x0 = Math.max(0, t.left - pad),
+    y0 = Math.max(0, t.top - pad),
+    x1 = Math.min(W, t.right + pad),
+    y1 = Math.min(H, t.bottom + pad);
+  place(panes[0], 0, 0, W, y0);
+  place(panes[1], 0, y1, W, H - y1);
+  place(panes[2], 0, y0, x0, y1 - y0);
+  place(panes[3], x1, y0, W - x1, y1 - y0);
+  ring.style.display = "block";
+  place(ring, x0, y0, x1 - x0, y1 - y0);
+
+  // 提示写在挖空处下面；下面放不下就写在上面
+  const nh = note.offsetHeight,
+    nw = note.offsetWidth,
+    gap = 14;
+  const below = y1 + gap + nh <= H - 8;
+  const ny = below ? y1 + gap : Math.max(8, y0 - gap - nh);
+  const nx = Math.min(Math.max(12, (x0 + x1) / 2 - nw / 2), W - nw - 12);
+  note.style.left = nx - base.left + "px";
+  note.style.top = ny - base.top + "px";
+}
+
+// 真正的功能里埋的钩子：教学开着时，按教学的进度往下走
+function _tutHook(ev) {
+  if (!_tut.active) return;
+  const step = _tut.step;
+  // 弹窗被关掉（取消）→ 回到上一步重来；确定提交的话同步就会先跳到下一步
+  const backIfStill = (popupStep, back) =>
     setTimeout(() => {
-      closeBtn.style.display = "flex";
-      closeBtn.classList.add("unlocked");
-    }, 600);
+      if (_tut.active && _tut.step === popupStep) _tutGo(back);
+    }, 0);
+  if (ev === "interp-open" && step === "longpress") _tutGo("interpWrite");
+  else if (ev === "interp-close") backIfStill("interpWrite", "longpress");
+  else if (ev === "interp-submit" && step === "interpWrite") _tutGo("tap");
+  else if (ev === "interp-expand" && step === "tap") _tutGo("agree");
+  else if (ev === "interp-collapse" && step === "agree") _tutGo("tap");
+  else if (ev === "agree" && step === "agree" && ++_tut.agrees >= 2) setTimeout(() => _tutGo("impressBtn"), 500);
+  else if (ev === "imp-open" && step === "impressBtn") _tutGo("impWrite");
+  else if (ev === "imp-close") backIfStill("impWrite", "impressBtn");
+  else if (ev === "imp-submit" && step === "impWrite") _tutGo("impDone");
+  else if (ev === "warn-open" && step === "likeBtn") _tutGo("warn");
+  else if (ev === "warn-close") backIfStill("warn", "likeBtn");
+  else if (ev === "opener-open" && (step === "likeBtn" || step === "warn")) _tutGo("opener");
+  else if (ev === "opener-close") backIfStill("opener", "likeBtn");
+  else if (ev === "liked" && step === "opener") _tutGo("done");
+}
+
+// 教学里对示范档案的请求不发出去，直接回一个假的结果
+function _tutFakeResponse(url, opts) {
+  if (!_tut.active || (opts.method || "GET") !== "POST" || !String(opts.body || "").includes(TUT_USER)) return null;
+  let data = { success: true };
+  if (url === "/interpretation/agree") {
+    const b = JSON.parse(opts.body);
+    const it = currentProfileInterpretations[b.field]?.[b.interpIndex];
+    data = { agrees: (it?.agrees || 0) + 1 };
   }
+  return Promise.resolve(new Response(JSON.stringify(data), { status: 200, headers: { "Content-Type": "application/json" } }));
+}
+
+const _tutIsDemo = (p) => p?.username === TUT_USER;
+
+// 教学开着时，每一步只能做这一步教的动作（比如长按那一步短按不会把红字弹出来）
+const _TUT_ALLOW = { longpress: ["longpress"], tap: ["tap"], agree: ["tap"] };
+function _tutBlocks(action) {
+  return _tut.active && !(_TUT_ALLOW[_tut.step] || []).includes(action);
+}
+
+function _tutFinish() {
+  _tut.active = false;
+  cancelAnimationFrame(_tut.raf);
+  document.getElementById("tut").classList.add("hidden");
+  // 拿掉示范档案，回到它原来的位置（喜欢完它已经翻到下一张了）
+  const i = profiles.findIndex(_tutIsDemo);
+  if (i >= 0) {
+    profiles.splice(i, 1);
+    currentIndex = i;
+  }
+  showProfile();
+  document.querySelector("#swipe-page .card-frame")?.scrollTo(0, 0);
+  startSwipeInterrupts();
+  startGenderedNotifications();
+  _resumeAfterOverlay();
 }
 
 let currentProfileInterpretations = {};
@@ -4609,6 +4644,8 @@ function attachLabelHandlers(profileUsername, containerEl) {
   }
 
   container._onTouchStart = (e) => {
+    // 新的一次按下：上一次长按后浏览器没补发 click 的话，标记会一直留着把这次短按吞掉
+    longPressJustFired = false;
     const label = e.target.closest(".value[data-field]");
     if (!label) return;
 
@@ -4624,6 +4661,7 @@ function attachLabelHandlers(profileUsername, containerEl) {
     const enLine = clone.querySelector(".bi-en")?.textContent.trim() || zhLine;
     const labelTextLocked = { zh: zhLine, en: enLine };
 
+    if (_tutBlocks("longpress")) return;
     longPressTimer = setTimeout(() => {
       longPressTimer = null;
       longPressJustFired = true;
@@ -4690,6 +4728,7 @@ function attachLabelHandlers(profileUsername, containerEl) {
               if (!arr[interpIndex].agreedBy) arr[interpIndex].agreedBy = {};
               arr[interpIndex].agreedBy[currentUser.username] = myAgrees + 1;
             }
+            _tutHook("agree");
           }
         });
       return;
@@ -4697,6 +4736,7 @@ function attachLabelHandlers(profileUsername, containerEl) {
 
     const span = e.target.closest(".value[data-field]");
     if (!span) return;
+    if (_tutBlocks("tap")) return;
 
     const field = span.dataset.field;
     const raw = currentProfileInterpretations[field];
@@ -4708,6 +4748,7 @@ function attachLabelHandlers(profileUsername, containerEl) {
       span.dataset.expanded = "false";
       span.classList.remove("interp-expanded");
       span.querySelectorAll(".interp-bubble").forEach((b) => b.remove());
+      _tutHook("interp-collapse");
       return;
     }
 
@@ -4752,6 +4793,7 @@ function attachLabelHandlers(profileUsername, containerEl) {
 
       span.appendChild(b);
     });
+    _tutHook("interp-expand");
 
     // Double-RAF: wait for layout so offsetWidth/offsetHeight are accurate
     requestAnimationFrame(() =>
@@ -4910,11 +4952,13 @@ function openInterpPopup(field, profileUsername, labelText) {
   document.getElementById("interpret-input").value = "";
   document.getElementById("interpret-popup").classList.remove("hidden");
   document.getElementById("interpret-input").focus();
+  _tutHook("interp-open");
 }
 
 function closeInterpPopup() {
   document.getElementById("interpret-popup").classList.add("hidden");
   interpTarget = { field: null, profileUsername: null, labelText: null };
+  _tutHook("interp-close");
 }
 
 function submitInterpretation() {
@@ -4943,6 +4987,7 @@ function submitInterpretation() {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ profileUsername, field, text, addedBy: currentUser.username }),
   });
+  _tutHook("interp-submit");
 }
 
 // ── Risk Warning System ───────────────────────────────────────
@@ -5304,6 +5349,7 @@ function showLikeWarning(warnings) {
     )
     .join("");
   document.getElementById("warning-overlay").classList.remove("hidden");
+  _tutHook("warn-open");
 }
 
 function proceedDespiteWarning() {
@@ -5313,6 +5359,7 @@ function proceedDespiteWarning() {
 
 function closeWarning() {
   document.getElementById("warning-overlay").classList.add("hidden");
+  _tutHook("warn-close");
 }
 
 // send like to server
@@ -5424,6 +5471,7 @@ function openLikeOpenerPopup() {
   document.getElementById("opener-selected-text").textContent =
     "点击上方选择 Click to select";
   document.getElementById("like-opener-popup").classList.remove("hidden");
+  _tutHook("opener-open");
 }
 
 function selectOpener(key, type, display) {
@@ -5440,6 +5488,7 @@ function closeLikeOpenerPopup() {
   document.getElementById("like-opener-popup").classList.add("hidden");
   _selectedOpener = null;
   _selectedOpenerType = null;
+  _tutHook("opener-close");
 }
 
 function submitLikeOpener() {
@@ -5450,7 +5499,8 @@ function submitLikeOpener() {
 
   closeLikeOpenerPopup();
 
-  if (currentUser) {
+  // 教学里的示范档案：不存进发件箱（api 那边也不会真的发出去）
+  if (currentUser && !_tutIsDemo(target)) {
     _cacheOutbox(currentUser.username, currentUser.name, target.username, target.name, text);
     api("/messages", {
       method: "POST",
@@ -5481,6 +5531,15 @@ function like() {
   if (currentIndex >= profiles.length) return;
   const target = profiles[currentIndex];
   const warnings = buildWarnings(currentUser, target);
+  // 教学里每个人都要看到一次风险提示：和示范档案没冲突的话，补一条
+  if (_tutIsDemo(target) && !warnings.length)
+    warnings.push({
+      level: "warning",
+      lines: [
+        "对方是夜行动物 / Your match is nocturnal",
+        "你们的作息可能完全相反 / Your sleep schedules may never overlap",
+      ],
+    });
   if (warnings.length > 0) {
     showLikeWarning(warnings);
   } else {
@@ -5505,6 +5564,7 @@ function doLike(label, reason) {
   });
   currentIndex++;
   showProfile();
+  _tutHook("liked");
 }
 
 // CheckNotifications (likes)
@@ -5522,7 +5582,7 @@ function checkNotifications() {
 
 // 「我」/ 排行榜开着时，骚扰弹窗、提醒、喜欢横幅都先不出来；关掉后消息弹窗和横幅再补上
 function _quietOverlayOpen() {
-  return ["me-overlay", "rank-overlay"].some((id) => !document.getElementById(id)?.classList.contains("hidden"));
+  return _tut.active || ["me-overlay", "rank-overlay"].some((id) => !document.getElementById(id)?.classList.contains("hidden"));
 }
 let _pendingLikeBanner = null;
 // 打开「我」/ 排行榜时：正在显示的消息弹窗放回队列最前面，喜欢横幅先收起（它们层级比浮层高）
@@ -5672,9 +5732,8 @@ function showNextPopup() {
     currentPopupMsg = null;
     return;
   }
-  // 只在 swipe-page 激活且 onboard-overlay 已关闭时才弹窗
-  const onboardVisible = !document.getElementById("onboard-overlay")?.classList.contains("hidden");
-  if (!document.getElementById("swipe-page")?.classList.contains("active") || onboardVisible || _quietOverlayOpen()) {
+  // 只在 swipe-page 激活、没开着教学 / 「我」/ 排行榜时才弹窗
+  if (!document.getElementById("swipe-page")?.classList.contains("active") || _quietOverlayOpen()) {
     popupShowing = false;
     return;
   }
@@ -7984,16 +8043,19 @@ function impression(text) {
       impression: text,
     }),
   });
+  _tutHook("imp-submit");
 }
 
 function openImpressionPopup() {
   if (currentIndex >= profiles.length) return;
   document.getElementById("swipe-impression-input").value = "";
   document.getElementById("swipe-impression-popup").classList.remove("hidden");
+  _tutHook("imp-open");
 }
 
 function closeImpressionPopup() {
   document.getElementById("swipe-impression-popup").classList.add("hidden");
+  _tutHook("imp-close");
 }
 
 function submitSwipeImpression() {

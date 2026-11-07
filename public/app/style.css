@@ -101,231 +101,6 @@ canvas {
   background: transparent;
 }
 
-@keyframes tutFlash {
-  0%   { opacity: 0.7; }
-  30%  { opacity: 0.4; }
-  60%  { opacity: 0.7; }
-  100% { opacity: 0; }
-}
-
-@keyframes wordGlitch {
-  0%   { color: var(--c-text); transform: none; text-shadow: none; }
-  12%  { color: #cc1e1e; transform: translateX(-4px); text-shadow: 4px 0 #cc1e1e; }
-  25%  { color: var(--c-text); transform: translateX(4px); text-shadow: -3px 1px rgb(var(--ink-rgb) / 0.5); }
-  40%  { color: #cc1e1e; transform: translateX(-2px) skewX(-5deg); }
-  55%  { color: var(--c-text); transform: translateX(2px); }
-  70%  { color: #cc1e1e; transform: translateX(-1px); text-shadow: 3px 1px #cc1e1e; }
-  100% { color: var(--c-text); transform: none; text-shadow: none; }
-}
-
-@keyframes enterPulse {
-  0%, 100% { box-shadow: 0 0 0 2px rgb(var(--line-rgb) / 0.45); border-color: rgb(var(--line-rgb) / 0.40); }
-  50%       { box-shadow: 0 0 0 2px rgb(var(--line-rgb) / 0.70); border-color: rgb(var(--line-rgb) / 0.65); }
-}
-
-/* ── Onboarding overlay (replaces swipe-tutorial page) ───── */
-#onboard-overlay {
-  position: fixed;
-  inset: 0;
-  z-index: 8500;
-  background: rgb(var(--panel-rgb) / 0.96);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  backdrop-filter: blur(2px);
-}
-#onboard-overlay.hidden { display: none; }
-
-.ob-step { display: none; flex-direction: column; align-items: center; gap: 2rem; padding: 2.5rem 2rem; width: 100%; max-width: 420px; position: relative; }
-.ob-step.active { display: flex; }
-
-/* scanline texture inside overlay */
-.ob-scanlines {
-  position: fixed;
-  inset: 0;
-  background: repeating-linear-gradient(0deg, transparent, transparent 2px, rgba(0,0,0,0.03) 2px, rgba(0,0,0,0.03) 4px);
-  pointer-events: none;
-  z-index: 0;
-}
-
-.ob-step-inner { position: relative; z-index: 1; display: flex; flex-direction: column; align-items: center; gap: 2rem; width: 100%; }
-
-.ob-progress {
-  font-family: "Zpix", monospace;
-  font-size: 11px;
-  color: rgb(var(--ink-rgb) / 0.5);
-  letter-spacing: 0.15em;
-  text-shadow: 1px 1px 0 rgba(0,0,0,0.07);
-}
-
-.ob-title-en {
-  font-family: "Zpix", monospace;
-  font-size: 13px;
-  color: rgb(var(--ink-rgb) / 0.55);
-  margin: -1.5rem 0 0;
-  text-align: center;
-  letter-spacing: 0.08em;
-  text-shadow: 1px 1px 0 rgba(0,0,0,0.07);
-}
-
-/* Long-press popup inside overlay */
-.ob-input-wrap {
-  background: var(--c-bg);
-  border: 2px solid rgb(var(--line-rgb) / 0.45);
-  padding: 1.2rem;
-  display: flex;
-  flex-direction: column;
-  gap: 0.8rem;
-  width: 100%;
-  box-shadow: 0 0 0 2px rgb(var(--line-rgb) / 0.5), inset 2px 2px 0 rgba(255,255,255,0.10), inset -2px -2px 0 rgb(var(--line-rgb) / 0.15);
-}
-.ob-input-wrap.hidden { display: none; }
-
-.ob-nes-input {
-  background: var(--t-bg) !important;
-  color: var(--t-text) !important;
-  border-color: rgb(var(--line-rgb) / 0.45) !important;
-  width: 100%;
-}
-.ob-submit-btn {
-  color: var(--c-btn-text) !important;
-  align-self: flex-end;
-}
-
-/* Close / unlock button */
-.ob-close-btn {
-  position: fixed;
-  /* 浮层已向上盖住刘海，这里加上刘海高度，避开刘海区 */
-  top: calc(var(--safe-top, 0px) + 1.5rem);
-  right: 1.5rem;
-  z-index: 2;
-  width: 40px;
-  height: 40px;
-  background: transparent;
-  border: var(--btn-border);
-  box-shadow: var(--btn-raised);
-  color: var(--c-btn-text);
-  font-size: 18px;
-  cursor: pointer;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-family: "Zpix", monospace;
-  transition: opacity 0.3s, box-shadow 0.3s;
-  -webkit-tap-highlight-color: transparent;
-  text-shadow: 1px 1px 0 rgba(0,0,0,0.10);
-}
-
-.ob-close-btn.unlocked {
-  opacity: 1;
-  pointer-events: auto;
-  animation: enterPulse 1.8s ease-in-out infinite;
-}
-
-/* Interactive big titles (the element you press) */
-.ob-title-interactive {
-  font-family: "Zpix", monospace;
-  font-size: 48px;
-  color: var(--c-text);
-  text-shadow: 1px 1px 0 rgb(var(--ink-rgb) / 0.08);
-  cursor: pointer;
-  user-select: none;
-  -webkit-user-select: none;
-  -webkit-tap-highlight-color: transparent;
-  display: block;
-  text-align: center;
-  letter-spacing: 0.12em;
-  border-bottom: 2px dashed rgb(var(--ink-rgb) / 0.4);
-  padding: 0.2rem 1.2rem 0.4rem;
-  animation: obTitlePulse 2.2s ease-in-out infinite;
-}
-.ob-title-interactive.ob-done {
-  border-color: rgb(var(--ink-rgb) / 0.15);
-  color: rgb(var(--ink-rgb) / 0.3);
-  text-shadow: none;
-  animation: none;
-  cursor: default;
-}
-.ob-title-interactive.ob-glitch { animation: wordGlitch 0.45s ease-out forwards; }
-@keyframes obTitlePulse {
-  0%, 100% { opacity: 1; }
-  50%       { opacity: 0.75; }
-}
-
-/* Floating interpretation word in step 2 */
-.ob-float-word {
-  font-family: "Zpix", monospace;
-  font-size: 22px;
-  color: #cc1e1e;
-  text-shadow: 1px 1px 0 rgba(0,0,0,0.10);
-  cursor: pointer;
-  user-select: none;
-  -webkit-user-select: none;
-  -webkit-tap-highlight-color: transparent;
-  text-align: center;
-  letter-spacing: 0.1em;
-  transition: font-size 0.15s ease-out;
-  display: block;
-  padding: 0.6rem 1.2rem;
-  animation: obFadeIn 0.5s ease-out forwards;
-}
-.ob-float-word.hidden { display: none; }
-.ob-float-word.ob-glitch { animation: wordGlitch 0.45s ease-out forwards; }
-@keyframes obFadeIn {
-  from { opacity: 0; transform: translateY(8px); }
-  to   { opacity: 1; transform: translateY(0); }
-}
-
-/* Agree instruction block */
-.ob-agree-instr {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 0.3rem;
-  text-align: center;
-  animation: obFadeIn 0.4s ease-out forwards;
-}
-.ob-agree-instr.hidden { display: none; }
-
-.ob-agree-sub {
-  font-family: "Zpix", monospace;
-  font-size: 12px;
-  color: rgb(var(--ink-rgb) / 0.55);
-  letter-spacing: 0.06em;
-  text-align: center;
-  margin: 0;
-}
-
-.ob-agree-tally {
-  font-family: "Zpix", monospace;
-  font-size: 28px;
-  color: var(--c-text);
-  text-shadow: 1px 1px 0 rgb(var(--ink-rgb) / 0.08);
-  letter-spacing: 0.05em;
-}
-
-/* Avatar image in step 3 */
-.ob-avatar-img {
-  width: 250px;
-  height: 250px;
-  image-rendering: pixelated;
-  border: 2px solid rgb(var(--line-rgb) / 0.45);
-  box-shadow: 0 0 0 2px rgb(var(--line-rgb) / 0.5), inset 2px 2px 0 rgba(255,255,255,0.10), inset -2px -2px 0 rgb(var(--line-rgb) / 0.15);
-  transition: opacity 0.3s ease;
-  display: block;
-}
-
-/* Flash transition between steps */
-#ob-flash {
-  position: fixed;
-  inset: 0;
-  background: var(--c-btn-bg);
-  opacity: 0;
-  pointer-events: none;
-  z-index: 9000;
-}
-#ob-flash.active { animation: tutFlash 0.4s ease-out forwards; }
-
 /* ── Hobby tags ──────────────────────────────────────────── */
 .hobby-hint {
   font-size: 12px;
@@ -1387,8 +1162,7 @@ li.other .words {
 .card-frame {
   background: var(--c-mid);
   background-image: var(--grid-dark);
-  /* 边框质感同长按教学的输入框（.ob-input-wrap） */
-  border: 2px solid rgb(var(--line-rgb) / 0.45);
+    border: 2px solid rgb(var(--line-rgb) / 0.45);
   box-shadow:
     0 0 0 2px rgb(var(--line-rgb) / 0.5),
     inset 2px 2px 0 rgba(255, 255, 255, 0.10),
@@ -2318,7 +2092,6 @@ li.other .words {
 /* ── 全局格子纹理 — 所有实心背景容器 ── */
 
 /* 普通格子：模态框 / 面板 / 弹窗 */
-.ob-input-wrap,
 #profile-edit,
 .edit-overlay-inner,
 .opener-modal,
@@ -2340,7 +2113,6 @@ li.other .words {
 
 /* ── 刘海区：全屏浮层的背景向上盖住刘海，内容仍留在刘海下方 ──
    （body 已下移到刘海下沿；这些浮层以 body 为定位基准） */
-#onboard-overlay,
 #like-opener-popup:not(.hidden),
 #hobby-cat-picker:not(.hidden),
 #profile-edit,
@@ -2437,10 +2209,6 @@ html[data-lang="en"] .label small.en {
 .bi-stack > .zh,
 .bi-stack > .en {
   display: block;
-}
-/* 教学页的大标题：双语时只显示中文大字，英文在下面的小字里 */
-html[data-lang="both"] .ob-title-interactive .en {
-  display: none;
 }
 
 /* 左下角语言按钮（和 ▶ 同样大小，位置对称） */
@@ -2882,4 +2650,132 @@ html:not([data-lang="both"]) .bi-sep {
   display: flex;
   flex-direction: column;
   gap: 6px;
+}
+
+/* ── 教学：半透明的纸 + 挖空 ── */
+#tut {
+  position: fixed;
+  inset: 0;
+  z-index: 1500; /* 盖过顶栏和底下三个按钮，低于真正的弹窗 */
+  pointer-events: none;
+}
+#tut.hidden {
+  display: none;
+}
+.tut-pane {
+  position: fixed;
+  pointer-events: auto;
+  background: rgb(var(--panel-rgb) / 0.72);
+  background-image: var(--grid-bg);
+}
+/* 挖空处的虚线框，一闪一闪 */
+.tut-ring {
+  position: fixed;
+  pointer-events: none;
+  border: 2px dashed var(--c-text);
+  animation: tutRing 1.2s steps(2) infinite;
+}
+@keyframes tutRing {
+  50% { border-color: transparent; }
+}
+.tut-block {
+  position: fixed;
+  inset: 0;
+  display: none;
+  pointer-events: auto;
+}
+#tut[data-mode="look"] .tut-block,
+#tut[data-mode="full"] .tut-block {
+  display: block;
+}
+/* 写在纸上的提示 */
+.tut-note {
+  position: fixed;
+  z-index: 1;
+  width: min(300px, calc(100vw - 24px));
+  padding: 12px 14px;
+  pointer-events: auto;
+  font-family: "Zpix", monospace;
+  color: var(--c-text);
+  text-align: center;
+  /* 纸上再贴一张小纸条，字不会和下面卡片的字糊在一起 */
+  background: rgb(var(--panel-rgb) / 0.94);
+  background-image: var(--grid-bg);
+  border: 2px dashed rgb(var(--ink-rgb) / 0.5);
+}
+.tut-progress {
+  margin: 0 0 6px;
+  font-size: 11px;
+  letter-spacing: 0.15em;
+  opacity: 0.55;
+}
+.tut-progress:empty {
+  display: none;
+}
+.tut-text {
+  margin: 0;
+  font-size: 15px;
+  line-height: 1.6;
+  white-space: pre-line;
+}
+/* 双语时英文小一号写在中文下面 */
+.tut-text .bi-sep {
+  display: none !important;
+}
+.tut-text .en {
+  display: block;
+  font-size: 12px;
+  opacity: 0.75;
+  margin-top: 4px;
+}
+html[data-lang="zh"] .tut-text .en,
+html[data-lang="en"] .tut-text .zh {
+  display: none;
+}
+html[data-lang="en"] .tut-text .en {
+  font-size: 15px;
+  opacity: 1;
+  margin-top: 0;
+}
+.tut-actions {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 16px;
+  margin-top: 12px;
+}
+.tut-skip {
+  padding: 0;
+  font-family: inherit;
+  font-size: 11px;
+  color: var(--c-text);
+  opacity: 0.6;
+  background: none;
+  border: none;
+  text-decoration: underline;
+  cursor: pointer;
+}
+.nes-btn.tut-next {
+  margin: 0 !important;
+  font-size: 13px;
+}
+.nes-btn.tut-next[data-off="1"] {
+  display: none !important;
+}
+/* 开着真正的弹窗时：纸收起来，提示变成顶上一条，不挡弹窗 */
+#tut[data-mode="popup"] {
+  z-index: 100000;
+}
+#tut[data-mode="popup"] .tut-pane,
+#tut[data-mode="popup"] .tut-ring,
+#tut[data-mode="popup"] .tut-actions {
+  display: none;
+}
+#tut[data-mode="popup"] .tut-note {
+  width: calc(100vw - 24px);
+  padding: 8px 12px;
+  pointer-events: none;
+}
+#tut[data-mode="popup"] .tut-text {
+  font-size: 13px;
 }

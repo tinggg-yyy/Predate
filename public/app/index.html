@@ -865,6 +865,9 @@
         <button class="nes-btn me-row" onclick="showMeView('theme')">
           <span>色调 Theme</span><span class="me-row-arrow">▶</span>
         </button>
+        <button class="nes-btn me-row" onclick="replayTutorial()">
+          <span>重看教学 Tutorial</span><span class="me-row-arrow">▶</span>
+        </button>
         <!-- 只有管理员（创作者）看得到 -->
         <button class="nes-btn me-row hidden" id="me-admin-row" onclick="openAdmin()">
           <span>后台 Admin</span><span class="me-row-arrow">▶</span>
@@ -1142,52 +1145,21 @@
     </div>
 
     <!-- Onboarding Overlay (shown over swipe page) -->
-    <div id="onboard-overlay" class="hidden">
-      <div class="ob-scanlines"></div>
-      <div id="ob-flash"></div>
-
-      <!-- Step 1: 长按 / Hold — long press the big title itself -->
-      <div class="ob-step active" id="ob-step-1">
-        <div class="ob-step-inner">
-          <p class="ob-progress">01 / 03</p>
-          <span class="ob-title-interactive" id="ob-demo-long"><span class="zh">长按</span><span class="en">HOLD</span></span>
-          <p class="ob-title-en bi-stack"><span class="zh">长按，说说你怎么理解它</span><span class="en">hold => how you interpret this?</span></p>
-          <div class="ob-input-wrap hidden" id="ob-1-input">
-            <input id="ob-1-text" class="nes-input ob-nes-input" type="text" placeholder="mean一下它 / please be mean" maxlength="6" />
-            <button class="nes-btn ob-submit-btn" onclick="submitOb1()">确定 OK</button>
-          </div>
-        </div>
-      </div>
-
-      <!-- Step 2: 短按 + 赞同 — tap the big title, red word appears above -->
-      <div class="ob-step" id="ob-step-2">
-        <div class="ob-step-inner">
-          <p class="ob-progress">02 / 03</p>
-          <!-- Red floating word appears here (above title) after short press -->
-          <span class="ob-float-word hidden" id="ob-float-word" data-noi18n></span>
-          <!-- Interactive title to short-press -->
-          <span class="ob-title-interactive" id="ob-demo-short"><span class="zh">短按</span><span class="en">TAP</span></span>
-          <p class="ob-title-en bi-stack" id="ob-2-sub"><span class="zh">短按来看看别人怎么mean的</span><span class="en">tap to reveal others' opinions</span></p>
-          <!-- Agree hint (hidden until float word appears) -->
-          <div class="ob-agree-instr hidden" id="ob-agree-instr">
-            <p class="ob-agree-sub bi-stack"><span class="zh">赞同？继续点红字</span><span class="en">Agree? Keep Tapping</span></p>
-            <p class="ob-agree-tally">×<span id="ob-agree-left">3</span></p>
-          </div>
-        </div>
-      </div>
-
-      <!-- Step 3: 印象 with pre-carved avatar — tap label to open input, ✕ after carving -->
-      <div class="ob-step" id="ob-step-3">
-        <button class="ob-close-btn" id="ob-close-3" style="display:none" onclick="obFinish()">✕</button>
-        <div class="ob-step-inner">
-          <p class="ob-progress">03 / 03</p>
-          <img id="ob-avatar-img" class="ob-avatar-img" src="" alt="avatar" />
-          <span class="ob-title-interactive" id="ob-3-trigger"><span class="zh">印象</span><span class="en">IMPRESS</span></span>
-          <p class="ob-title-en bi-stack"><span class="zh">点一下，留下你的印象</span><span class="en">tap to leave an impression</span></p>
-          <div class="ob-input-wrap hidden" id="ob-3-input">
-            <input id="ob-3-text" class="nes-input ob-nes-input" type="text" placeholder="一个词定义它 / one word to define them" maxlength="6" />
-            <button class="nes-btn ob-submit-btn" id="ob-3-btn" onclick="submitOb3()">刻下 Carve it</button>
-          </div>
+    <!-- 教学：盖在真正浏览页上的半透明纸，挖空的地方是要按的（四块纸围出一个洞） -->
+    <div id="tut" class="hidden" data-mode="full">
+      <div class="tut-pane" id="tut-t"></div>
+      <div class="tut-pane" id="tut-b"></div>
+      <div class="tut-pane" id="tut-l"></div>
+      <div class="tut-pane" id="tut-r"></div>
+      <div class="tut-ring" id="tut-ring"></div>
+      <!-- 不能按的步骤：挖空处也挡住，点哪里都不会误触 -->
+      <div class="tut-block" onclick="tutNext()"></div>
+      <div class="tut-note" id="tut-note">
+        <p class="tut-progress" id="tut-progress"></p>
+        <p class="tut-text" id="tut-text"></p>
+        <div class="tut-actions">
+          <button class="tut-skip" onclick="_tutFinish()">跳过教学 Skip</button>
+          <button class="nes-btn tut-next" id="tut-next" onclick="tutNext()"></button>
         </div>
       </div>
     </div>
