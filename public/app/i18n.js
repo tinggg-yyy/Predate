@@ -135,7 +135,7 @@ if (document.body) _startI18n();
 else document.addEventListener("DOMContentLoaded", _startI18n);
 
 // ── 切换语言 ──
-const _LANG_LABEL = { zh: "中", en: "EN", both: "中EN" };
+const _LANG_LABEL = { zh: "中", en: "EN", both: "中+En" };
 
 function setLang(lang) {
   if (!LANG_MODES.includes(lang) || lang === currentLang) return;
@@ -150,7 +150,7 @@ function setLang(lang) {
   document.dispatchEvent(new CustomEvent("langchange", { detail: lang }));
 }
 
-// 左下角按钮：中 → EN → 中EN → 中 …
+// 左下角按钮：中 → EN → 中+En → 中 …
 function cycleLang() {
   setLang(LANG_MODES[(LANG_MODES.indexOf(currentLang) + 1) % LANG_MODES.length]);
 }
