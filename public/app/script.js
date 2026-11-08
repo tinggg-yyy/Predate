@@ -49,14 +49,11 @@ function _acceptLogin(data) {
   currentUser = profile;
 }
 
-// 临时：测试新教学用，老用户登录后也先走一遍教学。测完改回 false
-const _TUT_EVERY_LOGIN = true;
-
 // 登录后进入浏览页（老用户跳过教学）
 function _enterAfterLogin() {
   checkNotifications();
   startMessagePolling();
-  createSwipeCard({ skipOnboarding: !_TUT_EVERY_LOGIN });
+  createSwipeCard({ skipOnboarding: true });
 }
 
 // 打开 app 时：浏览器记着令牌就直接登录
