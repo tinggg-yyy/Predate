@@ -3875,7 +3875,7 @@ function _tutDemoGrid() {
 function _tutDemoProfile() {
   return {
     username: TUT_USER,
-    name: "教学兽",
+    name: "导览兽",
     breed: "鸟类 / Birds · 猫头鹰 / Owl",
     height: "35",
     gender: "雌/Female",
@@ -3925,11 +3925,11 @@ const _TUT_STEPS = {
   skipInfo: { target: () => _tutBtn(2), zh: "不来电？点右边的叉叉\n不过得告诉我们为什么哦", en: "Not feeling it? Hit the X.\nBut first, tell us why.", next: "msgInfo" },
   msgInfo: { target: () => document.getElementById("msg-notif-btn"), zh: "有人给你发消息啦？\n都在这里，别错过", en: "Got a message?\nYou'll find them all right here.", next: "rankInfo" },
   rankInfo: { target: () => document.getElementById("rank-btn"), zh: "来看看排行榜\n今天谁是人气王？", en: "The leaderboard!\nWho's everyone's favorite today?", next: "meInfo" },
-  meInfo: { target: () => document.querySelector("#swipe-topbar > .nes-btn"), zh: "这里是「我」！\n改档案、切语言、换皮肤，或者重看教学", en: "Your little corner!\nEdit your profile, switch languages and themes, or replay this tutorial.", next: "likeBtn" },
+  meInfo: { target: () => document.querySelector("#swipe-topbar > .nes-btn"), zh: "这里是「我」！\n改档案、切语言、换皮肤，或者重看功能导览", en: "Your little corner!\nEdit your profile, switch languages and themes, or replay this tour.", next: "likeBtn" },
   likeBtn: { target: () => _tutBtn(0), open: true, zh: "心动了吗？\n点亮这颗爱心，冲！", en: "Feeling the spark?\nHit that heart!" },
   warn: { popup: true, zh: "哎呀，系统觉得这段关系有点危险\n但你要是铁了心，就继续吧", en: "Uh-oh. The system sees a little red flag.\nStill wanna go for it? Be our guest." },
   opener: { popup: true, zh: "选一句开场白，发给 ta！\n小心，有些话可是要扣分的", en: "Pick an opener and send it!\nCareful, some lines will cost you points." },
-  done: { zh: "好啦，教学结束！\n去看看你的下一位嘉宾吧", en: "And that's the tour!\nGo meet your next potential match. 👀", next: "finish", btn: ["开始", "Let's go"] },
+  done: { zh: "好啦，功能导览结束！\n去看看你的下一位嘉宾吧", en: "And that's the tour!\nGo meet your next potential match. 👀", next: "finish", btn: ["开始", "Let's go"] },
 };
 // 进度编号只算纸上的步骤，不算弹窗里的提示
 const _TUT_ORDER = ["longpress", "tap", "agree", "impressBtn", "impDone", "skipInfo", "msgInfo", "rankInfo", "meInfo", "likeBtn"];
