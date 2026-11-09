@@ -170,7 +170,7 @@ canvas {
   display: flex;
   position: fixed;
   inset: 0;
-  z-index: 200;
+  z-index: 1100; /* 盖过浏览页顶栏（1000），顶栏也一起变暗 */
   background: rgba(0,0,0,0.72);
   align-items: center;
   justify-content: center;
@@ -2702,6 +2702,9 @@ html:not([data-lang="both"]) .bi-sep {
   background: rgb(var(--panel-rgb) / 0.94);
   background-image: var(--grid-bg);
   border: 2px dashed rgb(var(--ink-rgb) / 0.5);
+}
+#tut[data-wide="1"] .tut-note {
+  width: min(320px, calc(100vw - 24px));
 }
 .tut-progress {
   margin: 0 0 6px;

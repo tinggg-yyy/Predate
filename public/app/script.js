@@ -21,7 +21,7 @@ function _clearSession() {
 }
 
 // 教学的状态（教学代码在后面，这里先声明：api() 一加载就会被调用，要用到它）
-let _tut = { active: false, step: null, agrees: 0, raf: 0 };
+let _tut = { active: false, step: null, agrees: 0, raf: 0, merged: false };
 
 // 所有请求都走这里：自动带上令牌。令牌失效（401）时提示重新登录
 let _authExpiredShown = false;
@@ -3851,7 +3851,7 @@ function closeHobbyCatPicker() {
 // 整个页面盖一层半透明的「纸」，只挖空现在要按的地方，提示写在纸上。
 // 示范档案只存在本地：教学里的解读 / 赞同 / 印象 / 喜欢都不会发到服务器（api() 里拦下）。
 const TUT_USER = "__tutorial__";
-const TUT_FIELD = "mbti"; // 教长按 / 短按用的那一栏（换栏的话，下面提示里的「MBTI」也要跟着改）
+const TUT_FIELD = "mbti"; // 教长按 / 短按用的那一栏（换栏的话，下面提示里的「ENFP」也要跟着改成示范档案这一栏的内容）
 
 // 示范档案的头像：一张用「好」字拼的笑脸
 function _tutDemoGrid() {
@@ -3912,24 +3912,30 @@ function _tutDemoProfile() {
 }
 
 // 每一步：target = 挖空的地方（没有就整张纸盖住）；open = 挖空处能不能按（不能按的步骤点纸上的 ▶ 继续）
-// popup = 正在开着真正的弹窗，纸先收起来，只在顶上留一条提示
+// popup = 正在开着真正的弹窗，纸先收起来，只在顶上留一条提示（有 target 的话贴在弹窗上面）
+// noSkip = 不显示「跳过导览」（最后一步跳过和继续是一回事）
+// wide = 提示框宽一点（字多、不想换行的那一步）
+// merged = 写的看法和别人一模一样、被合并时，这一步改用这里的内容（盖掉同名的字段）
 const _TUT_STEPS = {
   intro: { zh: "恭喜你已经建立完自己的档案了\n是时候正式开始使用了\n跟随指示熟悉一下所有的功能吧", en: "Welcome to the real deal!\nFollow the little notes and see what you can do here.", next: "longpress" },
-  longpress: { target: () => _tutField(), open: true, zh: "长按「MBTI」\n来，说说你觉得这玩意儿是什么", en: "Hold down the MBTI.\nWhat's your take on this thing?" },
+  longpress: { target: () => _tutField(), open: true, zh: "长按「ENFP」\n写下你对它的理解\n（档案里每一栏都可以这样长按）", en: "Press and hold ENFP.\nWrite what it means to you.\n(You can do this on every field.)" },
   interpWrite: { popup: true, zh: "写下你的看法，毒舌一点也没关系～写完点确定", en: "Write what you think. Feel free to be a little mean. Tap OK when you're done." },
-  tap: { target: () => _tutField(), open: true, zh: "现在再点一下这里\n来看看别人的脑回路", en: "Now tap it again.\nLet's see what everyone else thinks." },
-  agree: { target: () => _tutBubbleArea(), open: true, zh: "谁说得有道理？点一下那句红字\n越多人认同，字就越大", en: "Someone make a good point? Tap their red words.\nThe more likes, the bigger they get." },
-  impressBtn: { target: () => _tutBtn(1), open: true, zh: "点中间亮着的按钮\n用一个词形容一下 ta", en: "Tap the glowing button.\nDescribe them in ONE word." },
+  tap: { target: () => _tutField(), open: true, zh: "现在再点一下这里\n看看大家都是怎么理解的\n（每一栏都可以这样点开看）", en: "Now tap it again.\nLet's see what everyone else thinks.\n(Every field works this way too.)",
+    merged: { zh: "有人和你写的一模一样！\n再点一下这里，看看合并后的那句", en: "Someone wrote the exact same thing!\nTap it again to see your merged words." } },
+  agree: { target: () => _tutBubbleArea(), open: true, zh: "谁说得有道理？点一下那句红字\n越多人认同，字就越大", en: "Someone make a good point? Tap their red words.\nThe more likes, the bigger they get.",
+    // 合并已经算点过一次赞了，不用再教点红字，看一眼就继续
+    merged: { open: false, next: "impressBtn", zh: "你们的看法合并成了一句\n合并就算你点了一次赞，所以字变大了", en: "Your words were merged into theirs.\nThat counts as your like, so they got bigger." } },
+  impressBtn: { target: () => _tutBtn(1), open: true, zh: "点中间的铅笔按钮\n用一个词形容一下 ta", en: "Tap the pencil button in the middle.\nDescribe them in ONE word." },
   impWrite: { popup: true, zh: "想好了吗？写下那个词，点确定\n它就会刻进 ta 的头像里", en: "Got a word? Type it in and hit OK.\nIt'll be carved into their avatar." },
-  impDone: { target: () => document.querySelector("#swipe-container .avatar-box"), zh: "看！你的评价已经刻上去了\n这下 ta 可跑不掉了", en: "Look! Your impression is carved in.\nNo taking it back now!", next: "skipInfo" },
+  impDone: { target: () => document.querySelector("#swipe-container .avatar-box"), zh: "看！你的评价已经刻上去了\n之后刷到 ta 的人也都会看到哦", en: "Look! Your impression is carved in.\nEveryone who visits them will see it too.", next: "skipInfo" },
   skipInfo: { target: () => _tutBtn(2), zh: "不来电？点右边的叉叉\n不过得告诉我们为什么哦", en: "Not feeling it? Hit the X.\nBut first, tell us why.", next: "msgInfo" },
   msgInfo: { target: () => document.getElementById("msg-notif-btn"), zh: "有人给你发消息啦？\n都在这里，别错过", en: "Got a message?\nYou'll find them all right here.", next: "rankInfo" },
   rankInfo: { target: () => document.getElementById("rank-btn"), zh: "来看看排行榜\n今天谁是人气王？", en: "The leaderboard!\nWho's everyone's favorite today?", next: "meInfo" },
-  meInfo: { target: () => document.querySelector("#swipe-topbar > .nes-btn"), zh: "这里是「我」！\n改档案、切语言、换皮肤，或者重看功能导览", en: "Your little corner!\nEdit your profile, switch languages and themes, or replay this tour.", next: "likeBtn" },
-  likeBtn: { target: () => _tutBtn(0), open: true, zh: "心动了吗？\n点亮这颗爱心，冲！", en: "Feeling the spark?\nHit that heart!" },
-  warn: { popup: true, zh: "哎呀，系统觉得这段关系有点危险\n但你要是铁了心，就继续吧", en: "Uh-oh. The system sees a little red flag.\nStill wanna go for it? Be our guest." },
-  opener: { popup: true, zh: "选一句开场白，发给 ta！\n小心，有些话可是要扣分的", en: "Pick an opener and send it!\nCareful, some lines will cost you points." },
-  done: { zh: "好啦，功能导览结束！\n去看看你的下一位嘉宾吧", en: "And that's the tour!\nGo meet your next potential match. 👀", next: "finish", btn: ["开始", "Let's go"] },
+  meInfo: { target: () => document.querySelector("#swipe-topbar > .nes-btn"), zh: "改档案、切语言、换皮肤、重看功能导览\n都在这里", en: "Edit your profile, switch languages and themes, or replay this tour.\nIt's all in here.", next: "likeBtn", wide: true },
+  likeBtn: { target: () => _tutBtn(0), open: true, zh: "心动了吗？\n点这颗爱心，冲！", en: "Feeling the spark?\nHit that heart!" },
+  warn: { popup: true, target: () => document.querySelector("#warning-overlay .warning-box"), zh: "哎呀，系统觉得这段关系有点危险\n但你要是铁了心，就继续吧", en: "Uh-oh. The system sees a little red flag.\nStill wanna go for it? Be our guest." },
+  opener: { popup: true, target: () => document.querySelector("#like-opener-popup .opener-modal"), zh: "选一句开场白，发给 ta！\n小心，有些话可是要扣分的", en: "Pick an opener and send it!\nCareful, some lines will cost you points." },
+  done: { zh: "好啦，功能导览结束！\n去认识你的下一位嘉宾吧", en: "And that's the tour!\nGo meet your next potential match. 👀", next: "finish", btn: ["开始", "Let's go"], noSkip: true },
 };
 // 进度编号只算纸上的步骤，不算弹窗里的提示
 const _TUT_ORDER = ["longpress", "tap", "agree", "impressBtn", "impDone", "skipInfo", "msgInfo", "rankInfo", "meInfo", "likeBtn"];
@@ -3956,7 +3962,7 @@ function startTutorial() {
   profiles.splice(currentIndex, 0, demo);
   showProfile();
   document.querySelector("#swipe-page .card-frame")?.scrollTo(0, 0);
-  _tut = { active: true, step: null, agrees: 0, raf: 0 };
+  _tut = { active: true, step: null, agrees: 0, raf: 0, merged: false };
   // 已经弹出来的消息 / 「有人喜欢你」横幅先收起来，教学完再出来
   _quietOverlayEnter();
   document.getElementById("tut").classList.remove("hidden");
@@ -3975,31 +3981,39 @@ function replayTutorial() {
   startTutorial();
 }
 
+// 这一步现在的内容：看法被合并过的话，用 merged 里的盖掉
+function _tutStep(step = _tut.step) {
+  const s = _TUT_STEPS[step];
+  return _tut.merged && s?.merged ? { ...s, ...s.merged } : s;
+}
+
 function _tutGo(step) {
   if (step === "finish") return _tutFinish();
   _tut.step = step;
-  const s = _TUT_STEPS[step];
+  const s = _tutStep();
   const root = document.getElementById("tut");
   root.dataset.mode = s.popup ? "popup" : s.target ? (s.open ? "open" : "look") : "full";
+  root.dataset.wide = s.wide ? "1" : "";
   const n = _TUT_ORDER.indexOf(step);
   document.getElementById("tut-progress").textContent = n >= 0 ? `${String(n + 1).padStart(2, "0")} / ${String(_TUT_ORDER.length).padStart(2, "0")}` : "";
   document.getElementById("tut-text").innerHTML = biHtml(s.zh, s.en);
   const next = document.getElementById("tut-next");
   next.dataset.off = s.next ? "" : "1"; // .nes-btn 的 display 带 !important，用 CSS 属性选择器藏
   next.innerHTML = biHtml(...(s.btn || [step === "intro" ? "开始" : "继续", step === "intro" ? "Start" : "Next"])) + " ▶";
-  // 要按的东西先滚到看得见的地方
+  root.querySelector(".tut-skip").hidden = !!s.noSkip;
+  // 要按的东西先滚到看得见的地方（弹窗是固定的，不用滚）
   const t = s.target?.();
-  if (t instanceof Element) t.scrollIntoView({ block: "center", behavior: "smooth" });
+  if (t instanceof Element && !s.popup) t.scrollIntoView({ block: "center", behavior: "smooth" });
 }
 
 function tutNext() {
-  const s = _TUT_STEPS[_tut.step];
+  const s = _tutStep();
   if (s?.next) _tutGo(s.next);
 }
 
 // 每一帧按目标现在的位置摆好四块纸和提示（卡片会滚动、红字会飘）
 function _tutLayout() {
-  const s = _TUT_STEPS[_tut.step];
+  const s = _tutStep();
   const root = document.getElementById("tut");
   const note = document.getElementById("tut-note");
   // body 被刘海往下挪过，fixed 浮层以 body 为基准，所以坐标要减掉 body 的位置
@@ -4017,12 +4031,21 @@ function _tutLayout() {
     el.style.height = Math.max(0, h) + "px";
   };
 
+  note.style.width = "";
   if (!t || s.popup) {
     // 没有目标：整张纸盖满（弹窗步骤里纸由 CSS 收起来）
     place(panes[0], 0, 0, W, H);
     panes.slice(1).forEach((p) => place(p, 0, 0, 0, 0));
     ring.style.display = "none";
-    if (s.popup) {
+    if (s.popup && t?.width) {
+      // 贴在弹窗正上方，和弹窗一样宽；上面放不下就贴在下面，都放不下就叠在弹窗顶上
+      note.style.width = t.width + "px";
+      const nh = note.offsetHeight,
+        gap = 10;
+      const ny = t.top - gap - nh >= 8 ? t.top - gap - nh : t.bottom + gap + nh <= H - 8 ? t.bottom + gap : Math.max(8, t.top + gap);
+      note.style.left = t.left - base.left + "px";
+      note.style.top = ny - base.top + "px";
+    } else if (s.popup) {
       note.style.left = 12 - base.left + "px";
       note.style.top = 12 - base.top + "px";
     } else {
@@ -4056,7 +4079,7 @@ function _tutLayout() {
 }
 
 // 真正的功能里埋的钩子：教学开着时，按教学的进度往下走
-function _tutHook(ev) {
+function _tutHook(ev, data) {
   if (!_tut.active) return;
   const step = _tut.step;
   // 弹窗被关掉（取消）→ 回到上一步重来；确定提交的话同步就会先跳到下一步
@@ -4066,7 +4089,10 @@ function _tutHook(ev) {
     }, 0);
   if (ev === "interp-open" && step === "longpress") _tutGo("interpWrite");
   else if (ev === "interp-close") backIfStill("interpWrite", "longpress");
-  else if (ev === "interp-submit" && step === "interpWrite") _tutGo("tap");
+  else if (ev === "interp-submit" && step === "interpWrite") {
+    _tut.merged = !!data?.merged;
+    _tutGo("tap");
+  }
   else if (ev === "interp-expand" && step === "tap") _tutGo("agree");
   else if (ev === "interp-collapse" && step === "agree") _tutGo("tap");
   else if (ev === "agree" && step === "agree" && ++_tut.agrees >= 2) setTimeout(() => _tutGo("impressBtn"), 500);
@@ -4972,7 +4998,11 @@ function submitInterpretation() {
   if (!Array.isArray(currentProfileInterpretations[field])) {
     currentProfileInterpretations[field] = [currentProfileInterpretations[field]];
   }
-  currentProfileInterpretations[field].push({ text, addedBy: currentUser.username, agrees: 0, agreedBy: {} });
+  const list = currentProfileInterpretations[field];
+  // 有人写过一模一样的看法 → 不另起一句，算给那句点一次赞
+  const same = list.find((it) => _sameInterp(it.text, text));
+  if (same) _agreeLocally(same);
+  else list.push({ text, addedBy: currentUser.username, agrees: 0, agreedBy: {} });
 
   // Mark the label in the DOM so the red glow indicator appears immediately
   document.querySelectorAll(`.value[data-field="${CSS.escape(field)}"]`).forEach(el => {
@@ -4983,8 +5013,32 @@ function submitInterpretation() {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ profileUsername, field, text, addedBy: currentUser.username }),
-  });
-  _tutHook("interp-submit");
+  })
+    .then((r) => r.json())
+    .then((data) => {
+      // 本地没认出来、服务器合并了（别人刚写的同一句）：把本地多出来的那句换成服务器的结果
+      if (!data.merged || same) return;
+      const mine = list.findIndex((it) => it.addedBy === currentUser.username && it.text === text);
+      if (mine >= 0) list.splice(mine, 1);
+      if (list[data.interpIndex]) _agreeLocally(list[data.interpIndex], data.agrees);
+    })
+    .catch(() => {});
+  _tutHook("interp-submit", { merged: !!same });
+}
+
+// 两句看法算不算「一模一样」：不管前后空格、中间多余的空格和英文大小写
+function _sameInterp(a, b) {
+  const norm = (t) => String(t || "").trim().replace(/\s+/g, " ").toLowerCase();
+  return norm(a) === norm(b);
+}
+
+// 合并时给那句看法记一票（每人最多 2 票，和点红字一样）
+function _agreeLocally(it, agrees) {
+  if (!it.agreedBy) it.agreedBy = {};
+  const mine = it.agreedBy[currentUser.username] || 0;
+  if (agrees === undefined && mine >= 2) return;
+  it.agreedBy[currentUser.username] = Math.min(2, mine + 1);
+  it.agrees = agrees ?? (it.agrees || 0) + 1;
 }
 
 // ── Risk Warning System ───────────────────────────────────────

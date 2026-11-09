@@ -580,7 +580,23 @@ app.post("/interpretation", function (req, res) {
       ? [profile.interpretations[field]]
       : [];
   }
-  profile.interpretations[field].push({ text, addedBy });
+  const list = profile.interpretations[field];
+  // 有人写过一模一样的看法 → 不另起一句，算给那句点一次赞（每人最多 2 次，和 /interpretation/agree 一样）
+  const norm = (t) => String(t || "").trim().replace(/\s+/g, " ").toLowerCase();
+  const interpIndex = list.findIndex((it) => norm(it.text) === norm(text));
+  if (interpIndex >= 0) {
+    const interp = list[interpIndex];
+    if (!interp.agreedBy) interp.agreedBy = {};
+    const myCount = interp.agreedBy[me] || 0;
+    if (myCount < 2) {
+      interp.agreedBy[me] = myCount + 1;
+      interp.agrees = (interp.agrees || 0) + 1;
+      fs.writeFileSync("profiles.json", stringifyProfiles(profiles));
+      io.emit("interpretation-agree-event", { profileUsername, field, interpIndex, agrees: interp.agrees });
+    }
+    return res.json({ success: true, merged: true, interpIndex, agrees: interp.agrees || 0 });
+  }
+  list.push({ text, addedBy });
 
   fs.writeFileSync("profiles.json", stringifyProfiles(profiles));
   io.emit("interpretation-event", { profileUsername, field, text, addedBy });
