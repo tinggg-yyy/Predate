@@ -68,7 +68,7 @@ async function loadRanking() {
   const data = await res.json();
   data.forEach((p) => _full.set(p.username, p));
 
-  const calcScore = (p) => Math.max(0, (p.score ?? 60) - (p.skips?.length || 0));
+  const calcScore = (p) => (p.score ?? 60) - (p.skips?.length || 0);
 
   ranking = data
     .filter((p) => p.name)
@@ -113,7 +113,7 @@ function showSpotlight(idx) {
 
     <div class="profile-score-stamp ${stampColorClass}">
       <span class="stamp-date">${c.stampDate}</span>
-      <span class="stamp-num">${c.score}</span>
+      <span class="stamp-num${String(c.score).length > 3 ? " stamp-num-long" : ""}">${c.score}</span>
       <span class="stamp-lines"><span></span><span></span></span>
     </div>
 
@@ -202,7 +202,7 @@ function startCycle() {
   }, 30000);
 }
 
-const calcScore = (p) => Math.max(0, (p.score ?? 60) - (p.skips?.length || 0));
+const calcScore = (p) => (p.score ?? 60) - (p.skips?.length || 0);
 
 // Snapshot of counts from previous refresh, used to detect new activity
 const _prevCounts = {}; // username -> { likes, skips, interps }
@@ -699,7 +699,7 @@ function generateTickerMessages(profiles) {
 
   profiles.forEach((p) => {
     const name = p.name || p.username || "某兽";
-    const score = Math.max(0, (p.score ?? 60) - (p.skips?.length || 0));
+    const score = (p.score ?? 60) - (p.skips?.length || 0);
     const cond = _buildCondition(p);
     const seeking = _rnd(_AD_SEEKING);
     const suffix = _rnd(_AD_SUFFIX);

@@ -218,8 +218,11 @@ function handleLogin() {
         _acceptLogin(data);
         _enterAfterLogin();
       } else if (status === 401) {
-        // username 存在但密码错
-        showAlert("密码错误 / Wrong password");
+        // username 存在但密码错：登录和注册是同一个框，可能是新用户撞了别人的用户名，两种情况都说清楚
+        showAlert(
+          "这个用户名已经有人用了\n是你的账号：密码不对，再试一次\n第一次来：换一个用户名注册吧\n" +
+          "This username is already taken.\nIf it's yours: wrong password, try again.\nNew here? Pick a different username.",
+        );
       } else if (status === 404) {
         // 新用户 → 走注册流程；选了接着填草稿的，回到上次填到的那页
         const draft = _draftResume;
@@ -960,7 +963,7 @@ function getTotalProfileScore() {
   const mbti = ["petMbti1","petMbti2","petMbti3","petMbti4"]
     .map(id => document.getElementById(id)?.value || "").join("");
   if (mbti.length === 4 && MBTI_SCORES[mbti] !== undefined) score += MBTI_SCORES[mbti];
-  return Math.max(0, score);
+  return score;
 }
 
 function showScoreDelta(delta) {
@@ -2730,21 +2733,23 @@ const HOUSING_TIERS = {
     6: ["豪车 / Luxury Car"],
   },
   // Tiered car models — each tier has multiple options, one picked randomly
+  // 普通车按国内大致售价分档：1 档 10 万以下 → 6 档 30-40 万的入门豪华
   carModelsRegular: {
-    1: ["Toyota Corolla 丰田卡罗拉", "Nissan Sylphy 日产轩逸"],
-    2: ["Honda Civic 本田思域", "Volkswagen Polo 大众Polo"],
-    3: ["Volkswagen Golf 大众高尔夫", "Mazda 3 马自达3"],
-    4: ["Toyota Camry 丰田凯美瑞", "Honda Accord 本田雅阁"],
-    5: ["Nissan Teana 日产天籁", "Mazda 6 马自达6"],
-    6: ["BMW 3 Series 宝马3系(入门)", "Mercedes C-Class 奔驰C级(入门)"],
+    1: ["Wuling Hongguang MINIEV 五菱宏光MINIEV", "BYD Seagull 比亚迪海鸥", "Chery QQ Ice Cream 奇瑞QQ冰淇淋", "Geely Panda Mini 吉利熊猫mini", "Changan Benben 长安奔奔"],
+    2: ["Volkswagen Polo 大众Polo", "Honda Fit 本田飞度", "Nissan Sylphy 日产轩逸", "Toyota Corolla 丰田卡罗拉", "BYD Qin PLUS 比亚迪秦PLUS"],
+    3: ["Honda Civic 本田思域", "Volkswagen Golf 大众高尔夫", "Mazda 3 马自达3", "BYD Song PLUS 比亚迪宋PLUS", "Geely Galaxy 吉利银河"],
+    4: ["Toyota Camry 丰田凯美瑞", "Honda Accord 本田雅阁", "Nissan Teana 日产天籁", "Mazda 6 马自达6", "Volkswagen Passat 大众帕萨特", "Tesla Model 3 特斯拉Model 3", "BYD Han 比亚迪汉"],
+    5: ["Xiaomi SU7 小米SU7", "Tesla Model Y 特斯拉Model Y", "Li Auto L6 理想L6", "NIO ET5 蔚来ET5", "AITO M7 问界M7", "Zeekr 001 极氪001"],
+    6: ["BMW 3 Series 宝马3系(入门)", "Mercedes C-Class 奔驰C级(入门)", "Audi A4L 奥迪A4L", "Cadillac CT5 凯迪拉克CT5", "NIO ET7 蔚来ET7"],
   },
+  // 按国内大致售价分档：1 档 40-60 万 → 6 档千万级
   carModelsLuxury: {
-    1: ["BMW 5 Series 宝马5系", "Mercedes E-Class 奔驰E级"],
-    2: ["Audi A6 奥迪A6", "Volvo XC90 沃尔沃XC90"],
-    3: ["BMW 7 Series 宝马7系", "Mercedes S-Class 奔驰S级"],
-    4: ["Porsche Cayenne 保时捷卡宴", "Range Rover 路虎揽胜"],
-    5: ["Ferrari Roma 法拉利Roma", "Porsche 911 保时捷911", "Lamborghini Huracán 兰博基尼"],
-    6: ["Rolls-Royce Ghost 劳斯莱斯幻影", "Bentley Bentayga 宾利添越", "Bugatti Chiron 布加迪"],
+    1: ["BMW 5 Series 宝马5系", "Mercedes E-Class 奔驰E级", "Audi A6 奥迪A6", "Lexus ES 雷克萨斯ES", "Tesla Model S 特斯拉Model S"],
+    2: ["Volvo XC90 沃尔沃XC90", "BMW X5 宝马X5", "Porsche Macan 保时捷Macan", "Maserati Ghibli 玛莎拉蒂Ghibli", "Cadillac Escalade 凯迪拉克凯雷德"],
+    3: ["BMW 7 Series 宝马7系", "Mercedes S-Class 奔驰S级", "Audi A8 奥迪A8", "Porsche Panamera 保时捷Panamera", "Maserati Quattroporte 玛莎拉蒂总裁"],
+    4: ["Porsche Cayenne 保时捷卡宴", "Range Rover 路虎揽胜", "Mercedes G-Class 奔驰大G", "Maybach S-Class 迈巴赫S级", "Bentley Bentayga 宾利添越"],
+    5: ["Ferrari Roma 法拉利Roma", "Porsche 911 保时捷911", "Lamborghini Huracán 兰博基尼Huracán", "Maserati MC20 玛莎拉蒂MC20", "Aston Martin DB12 阿斯顿·马丁DB12", "McLaren 750S 迈凯伦750S"],
+    6: ["Rolls-Royce Phantom 劳斯莱斯幻影", "Rolls-Royce Cullinan 劳斯莱斯库里南", "Lamborghini Revuelto 兰博基尼Revuelto", "Bugatti Chiron 布加迪Chiron", "Pagani Huayra 帕加尼Huayra", "Koenigsegg Jesko 柯尼塞格Jesko"],
   },
   parentsStatus: {
     1: "均已故",
@@ -4726,7 +4731,7 @@ function renderCardHTML(profile) {
 
   <div class="profile-score-stamp ${stampColorClass}">
     <span class="stamp-date">${c.stampDate}</span>
-    <span class="stamp-num">${c.score}</span>
+    <span class="stamp-num${String(c.score).length > 3 ? " stamp-num-long" : ""}">${c.score}</span>
     <span class="stamp-lines"><span></span><span></span></span>
   </div>
 
@@ -5630,7 +5635,8 @@ const OPENER_FIXED = [
   { zh: "我梦见你了", en: "I dreamed of you", type: "weird" },
   { zh: "你身上香吗", en: "Do you smell nice?", type: "weird" },
   { zh: "你咬人疼吗", en: "Does your bite hurt?", type: "weird" },
-  { zh: "你看起来很好抱", en: "You look so huggable", type: "weird" },
+  { zh: "看起来好好抱", en: "You look so huggable", type: "weird" },
+  { zh: "宝宝你好美", en: "Babe, you're gorgeous", type: "weird" },
   { zh: "你是食草还是食肉的", en: "Herbivore or carnivore?", type: "weird" },
   { zh: "你有没有换过毛色", en: "Ever dyed your fur?", type: "weird" },
   { zh: "你毛多还是毛少", en: "Fluffy or sleek?", type: "weird" },
@@ -5639,16 +5645,29 @@ const OPENER_FIXED = [
   // boring — penalty -3
   { zh: "你好呀", en: "Hello~", type: "boring" },
   { zh: "你好", en: "Hi", type: "boring" },
-  { zh: "hihi", en: "hihi", type: "boring" },
-  { zh: "哈喽", en: "Hallo", type: "boring" },
+  { zh: "hihi", en: "", type: "boring" }, // 中英文一样，只显示一次
+  { zh: "哈喽", en: "Hey there", type: "boring" },
   { zh: "在吗", en: "You there?", type: "boring" },
   { zh: "嗨", en: "Hey", type: "boring" },
+  { zh: "哈喽哈喽", en: "Hellooo", type: "boring" },
+  { zh: "在忙吗", en: "Busy?", type: "boring" },
+  { zh: "好可爱", en: "So cute", type: "boring" },
+  { zh: "好帅", en: "So handsome", type: "boring" },
+  { zh: "好酷", en: "So cool", type: "boring" },
+  { zh: "好萌", en: "Adorable", type: "boring" },
+  { zh: "好喜欢", en: "Really into you", type: "boring" },
   // flagged — penalty -10
   { zh: "睡了吗", en: "You awake?", type: "flagged" },
   { zh: "你一个人住吗", en: "Do you live alone?", type: "flagged" },
   { zh: "发我你的照片", en: "Send me your photos", type: "flagged" },
   { zh: "好近呀", en: "You're so close by", type: "flagged" },
   { zh: "约吗", en: "Wanna hook up?", type: "flagged" },
+  { zh: "看起来好好吃", en: "You look delicious", type: "flagged" },
+  { zh: "你会有反差吗", en: "Got a hidden wild side?", type: "flagged" },
+  { zh: "你看起来很反差", en: "Bet you're wild behind that face", type: "flagged" },
+  { zh: "wechat plz", en: "", type: "flagged" }, // 中英文一样，只显示一次
+  { zh: "你的v呢", en: "What's your WeChat?", type: "flagged" },
+  { zh: "可以要你的v吗", en: "Can I get your WeChat?", type: "flagged" },
 ];
 
 // 按对方档案生成的开场白（双语）；拆不出英文的（比如自定义爱好）英文里就用原词
@@ -5666,10 +5685,20 @@ function _genProfileOpeners(p) {
         const [zh, en] = zhEn(h);
         out.push({ zh: `我也喜欢${zh}！`, en: `I like ${en} too!` });
       });
-  if (p.mbti) out.push({ zh: `${p.mbti} 的你好！`, en: `Hi there, ${p.mbti}!` });
+  // MBTI 四个字母填齐了才问
+  // 英文冠词按第一个字母的读音：E、I、F、S、X 这些读出来是元音开头，用 an
+  if (p.mbti && p.mbti.length === 4) {
+    const an = /^[AEFHILMNORSX]/i.test(p.mbti) ? "an" : "a";
+    out.push({ zh: `原来你是 ${p.mbti}！`, en: `Oh, you're ${an} ${p.mbti}!` });
+  }
   if (p.occupation) {
     const [zh, en] = zhEn(p.occupation);
-    out.push({ zh: `做${zh}是什么感觉？`, en: `What's it like being a ${en}?` });
+    // 职业里有「体力劳动」「服务业」这种行业名，句子要对职业名和行业名都读得通；无业单独问
+    out.push(
+      zh === "无业"
+        ? { zh: "不用上班是什么感觉？", en: "What's it like not having to work?" }
+        : { zh: `${zh}的工作累不累？`, en: `${en}, huh? Is the job tiring?` },
+    );
   }
   return out.slice(0, 3);
 }
@@ -5703,6 +5732,8 @@ function openLikeOpenerPopup() {
     const chips = makeChipHtml(shuffled);
     const belt = document.createElement("div");
     belt.className = `opener-belt opener-belt-r${row}`;
+    // 滚一圈的时间按句子数量算（每句约 2.6 秒）：开场白加多了也保持原来的速度；三行稍微错开
+    belt.style.animationDuration = `${shuffled.length * 2.6 + [1, 0, 3][row]}s`;
     belt.innerHTML = chips + chips;
     belt.onpointerdown = (e) => {
       const chip = e.target.closest(".opener-chip");
@@ -5765,7 +5796,7 @@ function submitLikeOpener() {
   const penalties = { boring: -3, weird: -5, flagged: -10 };
   const delta = penalties[type];
   if (delta) {
-    _currentScore = Math.max(0, _currentScore + delta);
+    _currentScore += delta;
     const badge = document.getElementById("score-running-badge");
     if (badge) badge.textContent = `SCORE: ${_currentScore}`;
     setTimeout(() => showScoreDelta(delta), 400);
@@ -5955,7 +5986,7 @@ function _isCannedMsg(content) {
   }
   return (
     _cannedMsgs.has(content) ||
-    /^(我也喜欢.+！ \/ I like .+ too!|.+ 的你好！ \/ Hi there, .+!|做.+是什么感觉？ \/ What's it like being a .+\?)$/.test(content)
+    /^(我也喜欢.+！ \/ I like .+ too!|.+ 的你好！ \/ Hi there, .+!|做.+是什么感觉？ \/ What's it like being a .+\?|原来你是 .+！ \/ Oh, you're an? .+!|.+的工作累不累？ \/ .+, huh\? Is the job tiring\?|不用上班是什么感觉？ \/ What's it like not having to work\?)$/.test(content)
   );
 }
 const _noI18nAttr = (content) => (_isCannedMsg(content) ? "" : " data-noi18n");
@@ -7852,7 +7883,7 @@ function _rankThumb(p) {
   return _rankThumbCache.get(key);
 }
 let _rankDetailIdx = -1;
-const _rankScore = (p) => Math.max(0, (p.score ?? 60) - (p.skips?.length || 0));
+const _rankScore = (p) => (p.score ?? 60) - (p.skips?.length || 0);
 
 function openRanking() {
   stopSwipeInterrupts();

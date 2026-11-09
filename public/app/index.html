@@ -798,23 +798,21 @@
             <div id="p5-canvas-container">
               <!-- p5 canvas will be appended here. -->
             </div>
+            <!-- 工具栏布局和 Pixelgraphy 一样：画笔、橡皮擦各占一半；撤销、重做、清空三等分；下面一整行用字来画 -->
             <div id="tools">
-              <button class="nes-btn tool-active" id="brush-btn" onclick="setBrush()">画笔 Brush</button>
-              <button class="nes-btn" id="eraser-btn" onclick="setEraser()">
-                橡皮擦 Eraser
-              </button>
-              <button class="nes-btn is-warning" onclick="setUndo()">
-                撤销 Undo
-              </button>
-              <button class="nes-btn is-success" onclick="setClear()">
-                清空 Clear
-              </button>
-              <div id="text-tools">
+              <div class="tool-row">
+                <button class="nes-btn tool-active" id="brush-btn" onclick="setBrush()">画笔 Brush</button>
+                <button class="nes-btn" id="eraser-btn" onclick="setEraser()">橡皮擦 Eraser</button>
+                <button class="nes-btn" onclick="setUndo()">撤销 Undo</button>
+                <button class="nes-btn" onclick="setRedo()">重做 Redo</button>
+                <button class="nes-btn" onclick="setClear()">清空 Clear</button>
+              </div>
+              <div class="tool-row" id="text-tools">
                 <input
                   id="text-input"
                   class="nes-input"
                   type="text"
-                  placeholder="给自己一个词 / one word that is you"
+                  placeholder="用字来画：给自己一个词 / Draw with words: one word that is you"
                 />
               </div>
             </div>

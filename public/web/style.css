@@ -242,6 +242,8 @@ html, body {
   border-color: rgba(200, 30, 30, 0.82);
 }
 .profile-score-stamp.stamp-red .stamp-date,
+/* 四位的分数（如 -205）：字小一点，才放得进圆章 */
+.profile-score-stamp .stamp-num-long { font-size: 96px; }
 .profile-score-stamp.stamp-red .stamp-num {
   color: rgba(200, 30, 30, 0.96);
   text-shadow: 3px 3px 0 rgba(255,255,255,0.37);

@@ -265,8 +265,9 @@ function requireSelfOrAdmin(req, res, username) {
 function selfPayload(p, token) {
   return { ...publicProfile(p), token, isAdmin: isAdmin(p.username) };
 }
-// 分数是手机端算的，只接受合理范围内的数
-const clampScore = (n) => Math.max(0, Math.min(300, Math.round(Number(n) || 0)));
+// 分数是手机端算的，不封顶也不封底（正常填表最高 361、最低 −205）；
+// 只挡掉 ±1000 以外的数，那只可能是绕过页面伪造的请求
+const clampScore = (n) => Math.max(-1000, Math.min(1000, Math.round(Number(n) || 0)));
 
 // POST /login — 由服务器比对账号密码，只回答对不对，不把别人的密码发出去
 app.post("/login", function (req, res) {
@@ -737,7 +738,7 @@ app.post("/admin/reset-password", function (req, res) {
 // ── 排行榜（app 用）：服务器算好前十名再发，不用下载所有人的档案 ──
 // 规则和大屏 web 一样：分数 − 被跳过次数
 app.get("/ranking", function (req, res) {
-  const score = (p) => Math.max(0, (p.score ?? 60) - (p.skips?.length || 0));
+  const score = (p) => (p.score ?? 60) - (p.skips?.length || 0);
   res.json(reloadProfiles()
     .filter((p) => p.name)
     .sort((a, b) => score(b) - score(a))

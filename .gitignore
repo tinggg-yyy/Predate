@@ -7,3 +7,8 @@ profiles.backup-*.json
 custom-hobbies.backup-*.json
 sessions.json
 admin.json
+# 用户自定义的爱好 / 种族 / 性别·性取向·城市：服务器上的用户数据，不进 git（部署时不会被覆盖）
+# 文件不存在时服务器当作空列表
+custom-hobbies.json
+custom-breeds.json
+custom-options.json

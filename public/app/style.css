@@ -170,7 +170,7 @@ canvas {
   display: flex;
   position: fixed;
   inset: 0;
-  z-index: 1100; /* 盖过浏览页顶栏（1000），顶栏也一起变暗 */
+  z-index: 10000; /* 和跳过理由、发消息这些弹窗同一层：盖过顶栏，也盖过插进来的提醒（.swipe-interrupt 8000） */
   background: rgba(0,0,0,0.72);
   align-items: center;
   justify-content: center;
@@ -556,7 +556,8 @@ textarea {
   flex-direction: column;
   align-items: center;
   gap: 10px;
-  padding: 12px;
+  /* 左右不留白：画框尽量大（和 Pixelgraphy 一样好画） */
+  padding: 12px 0;
 }
 
 /*  float 抖动 像素
@@ -731,6 +732,8 @@ li.other .words {
 .profile-score-stamp.stamp-red::after { border-color: rgba(200, 30, 30, 0.82); }
 .profile-score-stamp.stamp-red .stamp-date,
 .profile-score-stamp.stamp-red .stamp-num { color: rgba(200, 30, 30, 0.96); }
+/* 四位的分数（如 -205）：字小一点，才放得进圆章 */
+.profile-score-stamp .stamp-num-long { font-size: 22px; }
 .profile-score-stamp.stamp-red .stamp-lines span { background: rgba(200, 30, 30, 0.92); }
 
 .avatar-box {
@@ -945,11 +948,32 @@ li.other .words {
 
 /* ── 画图区域 ── */
 
+/* 和 Pixelgraphy 一样的布局：第一行 6 列，画笔、橡皮擦各占 3 列，撤销、重做、清空各占 2 列；
+   第二行「用字来画」输入框占满一整行。宽度跟画框一样 */
 #tools {
   display: flex;
-  gap: 8px;
-  flex-wrap: wrap;
-  justify-content: center;
+  flex-direction: column;
+  gap: 10px;
+  width: 100%;
+}
+#tools .tool-row:first-child {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: 10px 8px;
+}
+#tools .tool-row:first-child .nes-btn {
+  grid-column: span 2;
+  min-width: 0;
+  margin: 0;
+  padding-left: 4px;
+  padding-right: 4px;
+  white-space: nowrap;
+}
+#tools .tool-row:first-child .nes-btn:nth-child(-n + 2) {
+  grid-column: span 3;
+}
+#text-tools .nes-input {
+  width: 100%;
 }
 
 .tool-active {
@@ -1083,7 +1107,9 @@ li.other .words {
   flex-wrap: wrap;
   gap: 6px;
 }
+/* 每一行的标签都拉宽撑满整行（包括最后一行），右边不留空 */
 .reason-label-btn {
+  flex: 1 1 auto;
   padding: 4px 10px;
   border: var(--btn-border);
   box-shadow: var(--btn-raised);

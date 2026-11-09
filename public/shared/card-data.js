@@ -956,23 +956,15 @@ function _isValidGrid(g) {
 const _blankGrid = () => Array.from({ length: 32 }, () => Array(32).fill("/"));
 
 // ── 32×32 像素格：档案头像（app / 大屏）和画图页共用，保证两边长得一模一样 ──
-// 每一格先铺一块「没点亮」的底色；像素正好盖住这一格，字放在这一格正中间
+// 和 Pixelgraphy 一样：浅色底，像素填满一格，字放在格子正中，最上面盖一层淡淡的深色格子线
 const _PIXEL_CELL = { 1: 1, 2: 1, 3: 1, 4: 1, pixel: 1 };
 const _TEXT_CELL = { text: 1, "#": 1, "#1": 1, "#2": 1, "#3": 1, "#4": 1 };
+const _GRID_LINE_ALPHA = 22 / 255; // 格子线深浅（和 Pixelgraphy 一样）
 
 // 配色：app 里跟着配色走（theme.js）；大屏 web 没有配色，用原版灰绿
-let _gridColorCache = { key: null };
 function _pixelGridColors() {
-  if (typeof themeInk !== "function") {
-    return { bg: "#a9b0a2", dead: "#a2a99b", ink: (a) => `rgba(40,56,24,${a})` };
-  }
-  const key = themeBg() + themeInk();
-  if (_gridColorCache.key !== key) {
-    const bg = themeBg();
-    const dead = getComputedStyle(document.documentElement).getPropertyValue("--c-dead").trim() || bg;
-    _gridColorCache = { key, bg, dead, ink: themeInk };
-  }
-  return _gridColorCache;
+  if (typeof themeInk !== "function") return { bg: "#a9b0a2", ink: (a) => `rgba(40,56,24,${a})` };
+  return { bg: themeBg(), ink: themeInk };
 }
 
 // 字形的实际边界（不是字体的行高）：用来把字摆到格子正中
@@ -993,13 +985,12 @@ function _glyphBox(ctx, ch) {
 }
 
 // 在 ctx 上画整张 32×32 的画，边长 size（CSS 像素）；dpr：画布的像素密度（画图页 p5 是 pixelDensity()）
-// 缝、阴影、字号都按格子大小的固定比例，再对齐到设备像素：大小不同的画布看起来比例一样，边缘也清楚
+// 线粗、阴影、字号都按格子大小的固定比例：大小不同的画布（画图页 / 头像大图 / 排行榜小图）看起来比例一样
 function drawPixelGrid(ctx, grid, gridText, size, dpr = 1) {
   if (!_isValidGrid(grid)) grid = _blankGrid();
-  const { bg, dead, ink } = _pixelGridColors();
+  const { bg, ink } = _pixelGridColors();
   const snap = (v) => Math.max(1, Math.round(v * dpr)) / dpr;
   const cell = size / 32;
-  const gap = snap(cell / 9); // 格子之间的缝（每边）
   const shadow = snap((cell * 3) / 32);
   const text = gridText || "";
 
@@ -1007,19 +998,14 @@ function drawPixelGrid(ctx, grid, gridText, size, dpr = 1) {
   ctx.imageSmoothingEnabled = false;
   ctx.fillStyle = bg;
   ctx.fillRect(0, 0, size, size);
-  ctx.fillStyle = dead;
-  for (let y = 0; y < 32; y++) {
-    for (let x = 0; x < 32; x++) ctx.fillRect(x * cell + gap, y * cell + gap, cell - gap * 2, cell - gap * 2);
-  }
 
-  // 字占格子的 2/3（头像大图一格 36px → 24px，正好是 Zpix 点阵 12px 的两倍）
-  const fontPx = snap((cell * 2) / 3);
-  ctx.font = `${fontPx}px "Zpix", monospace`;
+  // 字和格子一样大（头像大图一格 36px → 36px，正好是 Zpix 点阵 12px 的三倍）
+  ctx.font = `${snap(cell)}px "Zpix", monospace`;
   ctx.textAlign = "left";
   ctx.textBaseline = "alphabetic";
   ctx.shadowColor = ink(0.6);
-  ctx.shadowOffsetX = shadow;
-  ctx.shadowOffsetY = shadow;
+  ctx.shadowOffsetX = shadow * dpr; // canvas 的阴影偏移是物理像素，不跟着缩放走
+  ctx.shadowOffsetY = shadow * dpr;
   ctx.shadowBlur = 0;
 
   // 好几个字的词：按从左到右、从上到下的顺序，一格放一个字轮流排
@@ -1028,25 +1014,37 @@ function drawPixelGrid(ctx, grid, gridText, size, dpr = 1) {
     for (let x = 0; x < 32; x++) {
       const c = grid[y][x];
       if (c === null || c === "/" || c === "") continue;
-      const alpha = _cellAlpha(c);
-      ctx.fillStyle = ink(alpha);
-      if (_PIXEL_CELL[c]) {
-        ctx.fillRect(x * cell + gap, y * cell + gap, cell - gap * 2, cell - gap * 2);
+      ctx.fillStyle = ink(_cellAlpha(c));
+      let ch = "";
+      if (_TEXT_CELL[c]) ch = text.length > 1 ? text[textIdx++ % text.length] : text;
+      else if (!_PIXEL_CELL[c]) ch = Array.isArray(c) ? c[0] : String(c);
+      // 像素格，或者文字格轮到的是空格：填满这一格
+      if (!ch.trim()) {
+        ctx.fillRect(x * cell, y * cell, cell, cell);
         continue;
       }
-      let ch;
-      if (_TEXT_CELL[c]) ch = text.length > 1 ? text[textIdx++ % text.length] : text;
-      else ch = Array.isArray(c) ? c[0] : String(c);
-      if (!ch) continue;
       const b = _glyphBox(ctx, ch);
       ctx.fillText(ch, x * cell + (cell - b.w) / 2 + b.left, y * cell + (cell - b.h) / 2 + b.ascent);
     }
   }
+
+  // 格子线盖在最上面（拓麻歌子 LCD 质感），线粗是格子的 1/18（画图页一格 9px → 0.5px）
+  ctx.shadowColor = "rgba(0,0,0,0)";
+  ctx.strokeStyle = ink(_GRID_LINE_ALPHA);
+  ctx.lineWidth = cell / 18;
+  ctx.beginPath();
+  for (let i = 0; i <= 32; i++) {
+    ctx.moveTo(i * cell, 0);
+    ctx.lineTo(i * cell, size);
+    ctx.moveTo(0, i * cell);
+    ctx.lineTo(size, i * cell);
+  }
+  ctx.stroke();
   ctx.restore();
 }
 
 // outSize：输出图片的边长。默认 1152（档案卡大图，一格 36px）；排行榜列表的小头像用小尺寸，画得快、占内存少。
-// 直接按 outSize 画（不是画大再缩），小图的格子缝也对齐到像素
+// 直接按 outSize 画（不是画大再缩）
 function renderGridAsAvatar(grid, gridText, outSize = 1152) {
   const canvas = document.createElement("canvas");
   canvas.width = outSize;
@@ -1173,7 +1171,7 @@ function cardValues(profile, { perRow = 3 } = {}) {
   const p = profile || {};
   const rel = p.relationship || {};
   const par = p.parents || {};
-  const score = Math.max(0, (p.score ?? 60) - (p.skips ? p.skips.length : 0));
+  const score = (p.score ?? 60) - (p.skips ? p.skips.length : 0);
   const sd = p.date ? new Date(p.date) : null;
 
   const breed = cardBreed(p);
