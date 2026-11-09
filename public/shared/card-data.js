@@ -955,78 +955,103 @@ function _isValidGrid(g) {
 // 空白画布：画坏了 / 没画的档案就显示空格子，不报错
 const _blankGrid = () => Array.from({ length: 32 }, () => Array(32).fill("/"));
 
+// ── 32×32 像素格：档案头像（app / 大屏）和画图页共用，保证两边长得一模一样 ──
+// 每一格先铺一块「没点亮」的底色；像素正好盖住这一格，字放在这一格正中间
+const _PIXEL_CELL = { 1: 1, 2: 1, 3: 1, 4: 1, pixel: 1 };
+const _TEXT_CELL = { text: 1, "#": 1, "#1": 1, "#2": 1, "#3": 1, "#4": 1 };
+
+// 配色：app 里跟着配色走（theme.js）；大屏 web 没有配色，用原版灰绿
+let _gridColorCache = { key: null };
+function _pixelGridColors() {
+  if (typeof themeInk !== "function") {
+    return { bg: "#a9b0a2", dead: "#a2a99b", ink: (a) => `rgba(40,56,24,${a})` };
+  }
+  const key = themeBg() + themeInk();
+  if (_gridColorCache.key !== key) {
+    const bg = themeBg();
+    const dead = getComputedStyle(document.documentElement).getPropertyValue("--c-dead").trim() || bg;
+    _gridColorCache = { key, bg, dead, ink: themeInk };
+  }
+  return _gridColorCache;
+}
+
+// 字形的实际边界（不是字体的行高）：用来把字摆到格子正中
+const _glyphBoxCache = new Map();
+function _glyphBox(ctx, ch) {
+  const key = ctx.font + "|" + ch;
+  let box = _glyphBoxCache.get(key);
+  if (!box) {
+    const m = ctx.measureText(ch);
+    box = {
+      left: m.actualBoundingBoxLeft, w: m.actualBoundingBoxLeft + m.actualBoundingBoxRight,
+      ascent: m.actualBoundingBoxAscent, h: m.actualBoundingBoxAscent + m.actualBoundingBoxDescent,
+    };
+    // 字体还没加载完时量到的是后备字体，先不缓存
+    if (!document.fonts || document.fonts.check(ctx.font)) _glyphBoxCache.set(key, box);
+  }
+  return box;
+}
+
+// 在 ctx 上画整张 32×32 的画，边长 size（CSS 像素）
+function drawPixelGrid(ctx, grid, gridText, size) {
+  if (!_isValidGrid(grid)) grid = _blankGrid();
+  const { bg, dead, ink } = _pixelGridColors();
+  const cell = size / 32;
+  const gap = Math.max(1, Math.round(cell / 16)); // 格子之间的缝（每边）
+  const shadow = Math.max(1, Math.round((cell * 3) / 32));
+  const text = gridText || "";
+
+  ctx.save();
+  ctx.imageSmoothingEnabled = false;
+  ctx.fillStyle = bg;
+  ctx.fillRect(0, 0, size, size);
+  ctx.fillStyle = dead;
+  for (let y = 0; y < 32; y++) {
+    for (let x = 0; x < 32; x++) ctx.fillRect(x * cell + gap, y * cell + gap, cell - gap * 2, cell - gap * 2);
+  }
+
+  // Zpix 是 12px 的点阵字：字号取 12 的倍数最清楚（1024 的大图上一格 32px → 24px 字）
+  const fontPx = cell >= 24 ? Math.floor((cell - gap * 2) / 12) * 12 : Math.round(cell * 0.75);
+  ctx.font = `${fontPx}px "Zpix", monospace`;
+  ctx.textAlign = "left";
+  ctx.textBaseline = "alphabetic";
+  ctx.shadowColor = ink(0.6);
+  ctx.shadowOffsetX = shadow;
+  ctx.shadowOffsetY = shadow;
+  ctx.shadowBlur = 0;
+
+  // 好几个字的词：按从左到右、从上到下的顺序，一格放一个字轮流排
+  let textIdx = 0;
+  for (let y = 0; y < 32; y++) {
+    for (let x = 0; x < 32; x++) {
+      const c = grid[y][x];
+      if (c === null || c === "/" || c === "") continue;
+      const alpha = _cellAlpha(c);
+      ctx.fillStyle = ink(alpha);
+      if (_PIXEL_CELL[c]) {
+        ctx.fillRect(x * cell + gap, y * cell + gap, cell - gap * 2, cell - gap * 2);
+        continue;
+      }
+      let ch;
+      if (_TEXT_CELL[c]) ch = text.length > 1 ? text[textIdx++ % text.length] : text;
+      else ch = Array.isArray(c) ? c[0] : String(c);
+      if (!ch) continue;
+      const b = _glyphBox(ctx, ch);
+      ctx.fillText(ch, x * cell + (cell - b.w) / 2 + b.left, y * cell + (cell - b.h) / 2 + b.ascent);
+    }
+  }
+  ctx.restore();
+}
+
 // outSize：输出图片的边长。默认 1024（档案卡大图）；排行榜列表的小头像用小尺寸，画得快、占内存少。
 // 里面一律按 1024 的坐标画，再整体缩放到 outSize
 function renderGridAsAvatar(grid, gridText, outSize = 1024) {
-  if (!_isValidGrid(grid)) grid = _blankGrid();
   const canvas = document.createElement("canvas");
-  // 1024×1024 = 32px per cell — Zpix pixel font renders cleanest at multiples of its base size
-  const size = 1024;
   canvas.width = outSize;
   canvas.height = outSize;
   const ctx = canvas.getContext("2d");
-  ctx.imageSmoothingEnabled = false;
-  if (outSize !== size) ctx.scale(outSize / size, outSize / size);
-
-  // app 里跟着配色走（theme.js）；大屏 web 没有配色，用原版灰绿
-  const themed = typeof themeInk === "function";
-  const BG   = themed ? themeBg() : "#a9b0a2";
-  const DEAD = themed ? getComputedStyle(document.documentElement).getPropertyValue("--c-dead").trim() || BG : "#a2a99b"; // subtle inactive-cell tint for the grid
-  const inkA = (a) => (themed ? themeInk(a) : `rgba(40,56,24,${a})`);
-  const INK  = inkA(1);
-
-  ctx.fillStyle = BG;
-  ctx.fillRect(0, 0, size, size);
-
-  const cellSize = size / 32; // 32px per cell (pixel art grid)
-  const gap = 2;
-
-  // Finer background texture: 64×64 cells at 1px gap
-  const bgGrid = 64;
-  const bgCell = size / bgGrid;
-  const bgGap = 1;
-  ctx.fillStyle = DEAD;
-  for (let y = 0; y < bgGrid; y++) {
-    for (let x = 0; x < bgGrid; x++) {
-      ctx.fillRect(x * bgCell + bgGap, y * bgCell + bgGap, bgCell - bgGap * 2, bgCell - bgGap * 2);
-    }
-  }
-
-  // Font: Zpix at 26px is at its native pixel size on this canvas
-  ctx.textAlign = "center";
-  ctx.textBaseline = "middle";
-  ctx.font = `26px "Zpix", monospace`;
-
-  const pixelAlpha = { 1: 0.25, 2: 0.49, 3: 0.75, 4: 1 };
-  const textAlpha  = { "#1": 0.25, "#2": 0.49, "#3": 0.75, "#4": 1 };
-
-  ctx.shadowColor = inkA(0.6);
-  ctx.shadowOffsetX = 3;
-  ctx.shadowOffsetY = 3;
-  ctx.shadowBlur = 0;
-
-  const drawPixel = (x, y, alpha) => {
-    ctx.fillStyle = alpha >= 1 ? INK : inkA(alpha);
-    ctx.fillRect(x * cellSize + gap, y * cellSize + gap, cellSize - gap * 2, cellSize - gap * 2);
-  };
-
-  const drawChar = (x, y, ch, alpha) => {
-    ctx.fillStyle = alpha >= 1 ? INK : inkA(alpha);
-    ctx.fillText(ch, x * cellSize + cellSize / 2, y * cellSize + cellSize / 2);
-  };
-
-  for (let y = 0; y < 32; y++) {
-    for (let x = 0; x < 32; x++) {
-      const cell = grid[y][x];
-      if (cell === "pixel" || cell === 4)            drawPixel(x, y, 1);
-      else if (pixelAlpha[cell] !== undefined)       drawPixel(x, y, pixelAlpha[cell]);
-      else if (cell === "text" || cell === "#" || cell === "#4") drawChar(x, y, gridText, 1);
-      else if (textAlpha[cell] !== undefined)        drawChar(x, y, gridText, textAlpha[cell]);
-      else if (Array.isArray(cell))                  drawChar(x, y, cell[0], cell[1]);
-      else if (cell !== null && cell !== "/")        drawChar(x, y, cell, 1);
-    }
-  }
-
+  if (outSize !== 1024) ctx.scale(outSize / 1024, outSize / 1024);
+  drawPixelGrid(ctx, grid, gridText, 1024);
   return canvas.toDataURL();
 }
 

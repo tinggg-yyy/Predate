@@ -7,8 +7,11 @@ let history = []; // 每一笔的 diff 列表
 let currentStroke = []; // 当前这笔中被修改的格子 {x, y, oldVal}
 let strokeCells = new Set(); // 当前笔中已记录的格子，避免重复记录
 
+// 画框边长取 32 的整数倍：每一格都是整数像素，格子边缘不会糊
+const canvasSize = () => Math.max(32, Math.floor((windowWidth * 4) / 5 / 32) * 32);
+
 function setup() {
-  let canvas = createCanvas((windowWidth * 4) / 5, (windowWidth * 4) / 5);
+  let canvas = createCanvas(canvasSize(), canvasSize());
   canvas.parent("p5-canvas-container");
   clear();
 
@@ -20,81 +23,10 @@ function setup() {
   }
 }
 
+// 跟档案头像共用 drawPixelGrid（shared/card-data.js）：画的时候和生成出来的头像一模一样
 function draw() {
   clear();
-
-  let cellSize = width / 32;
-  const pixelAlpha = { 1: 65, 2: 125, 3: 190, 4: 255 };
-  const textAlpha  = { "#1": 65, "#2": 125, "#3": 190, "#4": 255 };
-
-  // Pre-number text cells in row-major order for multi-char distribution
-  const textCellIdx = {};
-  if (currentText.length > 1) {
-    let idx = 0;
-    for (let y = 0; y < 32; y++) {
-      for (let x = 0; x < 32; x++) {
-        const c = grid[y][x];
-        if (c === "text" || c === "#" || textAlpha[c] !== undefined) {
-          textCellIdx[`${x},${y}`] = idx++;
-        }
-      }
-    }
-  }
-
-  for (let y = 0; y < 32; y++) {
-    for (let x = 0; x < 32; x++) {
-      let cell = grid[y][x];
-
-      if (cell === "pixel" || cell === 4) {
-        fill(...themeInkRGB(), 255); noStroke();
-        drawingContext.shadowColor = themeInk(0.6);
-        drawingContext.shadowOffsetX = 2; drawingContext.shadowOffsetY = 2; drawingContext.shadowBlur = 0;
-        rect(x * cellSize, y * cellSize, cellSize, cellSize);
-        drawingContext.shadowColor = "rgba(0,0,0,0)";
-      } else if (pixelAlpha[cell] !== undefined) {
-        fill(...themeInkRGB(), pixelAlpha[cell]); noStroke();
-        drawingContext.shadowColor = themeInk(0.6);
-        drawingContext.shadowOffsetX = 2; drawingContext.shadowOffsetY = 2; drawingContext.shadowBlur = 0;
-        rect(x * cellSize, y * cellSize, cellSize, cellSize);
-        drawingContext.shadowColor = "rgba(0,0,0,0)";
-      } else if (cell === "text" || cell === "#" || cell === "#4") {
-        const ch = currentText.length > 1
-          ? currentText[(textCellIdx[`${x},${y}`] ?? 0) % currentText.length]
-          : currentText;
-        fill(...themeInkRGB(), 255);
-        textAlign(CENTER, CENTER); textSize(cellSize);
-        drawingContext.shadowColor = themeInk(0.6);
-        drawingContext.shadowOffsetX = 2; drawingContext.shadowOffsetY = 2; drawingContext.shadowBlur = 0;
-        text(ch, x * cellSize + cellSize / 2, y * cellSize + cellSize / 2);
-        drawingContext.shadowColor = "rgba(0,0,0,0)";
-      } else if (textAlpha[cell] !== undefined) {
-        const ch = currentText.length > 1
-          ? currentText[(textCellIdx[`${x},${y}`] ?? 0) % currentText.length]
-          : currentText;
-        fill(...themeInkRGB(), textAlpha[cell]);
-        textAlign(CENTER, CENTER); textSize(cellSize);
-        drawingContext.shadowColor = themeInk(0.6);
-        drawingContext.shadowOffsetX = 2; drawingContext.shadowOffsetY = 2; drawingContext.shadowBlur = 0;
-        text(ch, x * cellSize + cellSize / 2, y * cellSize + cellSize / 2);
-        drawingContext.shadowColor = "rgba(0,0,0,0)";
-      } else if (cell !== null && cell !== "/") {
-        fill(...themeInkRGB(), 255);
-        textAlign(CENTER, CENTER); textSize(cellSize);
-        drawingContext.shadowColor = themeInk(0.6);
-        drawingContext.shadowOffsetX = 2; drawingContext.shadowOffsetY = 2; drawingContext.shadowBlur = 0;
-        text(cell, x * cellSize + cellSize / 2, y * cellSize + cellSize / 2);
-        drawingContext.shadowColor = "rgba(0,0,0,0)";
-      }
-    }
-  }
-  // 网格线（增加拓麻歌子 LCD 质感）
-  stroke(...themeInkRGB(), 22);
-  strokeWeight(0.5);
-  for (let i = 0; i <= 32; i++) {
-    line(i * cellSize, 0, i * cellSize, height);
-    line(0, i * cellSize, width, i * cellSize);
-  }
-  noStroke();
+  drawPixelGrid(drawingContext, grid, currentText, width);
 }
 
 // P5 touch events: https://p5js.org/reference/#Touch
@@ -222,7 +154,7 @@ function touchEnded() {
 }
 
 function windowResized() {
-  resizeCanvas((windowWidth * 4) / 5, (windowWidth * 4) / 5);
+  resizeCanvas(canvasSize(), canvasSize());
 }
 
 // draw text on canvas based on currentText and update grid state

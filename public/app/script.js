@@ -221,8 +221,16 @@ function handleLogin() {
         // username 存在但密码错
         showAlert("密码错误 / Wrong password");
       } else if (status === 404) {
-        // 新用户 → 走注册流程
-        goTo("profile-name");
+        // 新用户 → 走注册流程；选了接着填草稿的，回到上次填到的那页
+        const draft = _draftResume;
+        _draftResume = null;
+        if (!draft) return goTo("profile-name");
+        try {
+          _restoreDraft(draft);
+        } catch (err) {
+          console.error("Restore draft failed:", err);
+          goTo("profile-name");
+        }
       } else {
         showAlert("登录失败，请稍后再试\nLogin failed, please try again.");
       }
@@ -286,6 +294,190 @@ function showAlert(msg) {
 }
 function closeCustomAlert() {
   document.getElementById("custom-alert-overlay").classList.add("hidden");
+}
+
+// ── 注册填到一半的草稿 ──────────────────────────────────────
+// 填写页的内容随时存在本机（不存密码）；中途退出再打开，问要不要接着填。
+// 选「继续」→ 登录页填好用户名，输完密码（handleLogin 的 404）就回到上次那一页
+const _DRAFT_KEY = "predate_draft";
+let _draftResume = null;
+let _draftTimer = 0;
+
+const _setupEls = () => document.querySelectorAll(".setup-page [id]");
+
+// 存 innerHTML 时换回双语原文（单语模式下页面上的字已经被 i18n 拆过）
+function _rawHTML(el) {
+  const copy = el.cloneNode(true);
+  const src = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
+  const dst = document.createTreeWalker(copy, NodeFilter.SHOW_TEXT);
+  while (src.nextNode() && dst.nextNode()) {
+    const orig = _origText.get(src.currentNode);
+    if (orig != null) dst.currentNode.data = orig;
+  }
+  return copy.innerHTML;
+}
+
+function _saveDraft() {
+  const page = document.querySelector(".page.active")?.id;
+  const username = document.getElementById("username")?.value.trim();
+  if (!_setupPageOrder.includes(page) || !username || currentUser || _tut.active) return;
+
+  // 每个带 id 的元素：值、是否隐藏、data-*（骰子剩几次、车价档次……）、骰子结果的文字
+  const els = {};
+  _setupEls().forEach((el) => {
+    const s = {};
+    if (el.classList.contains("hidden")) s.h = 1;
+    if (Object.keys(el.dataset).length) s.d = { ...el.dataset };
+    if (el.matches("input, select, textarea")) s.v = el.type === "checkbox" ? el.checked : el.value;
+    if (el.matches(".dice-roll-btn")) {
+      s.dis = el.disabled;
+      s.x = el.classList.contains("dice-exhausted");
+    }
+    if (el.matches(".dice-result-input, label, #rel-ships-list")) s.html = _rawHTML(el);
+    els[el.id] = s;
+  });
+
+  // 爱好标签没有 id：记下选中的，自己新加的（还没存进系统）记下分类以便重建
+  const hobbies = [...document.querySelectorAll("#hobby-tags .hobby-tag.selected")].map((el) => ({
+    zh: el.dataset.zh,
+    ...(el.dataset.new !== undefined && { category: el.dataset.category, tier: Number(el.dataset.tier) }),
+  }));
+  const standards = [...document.querySelectorAll("#standards-tags .hobby-tag.selected")].map((el) => el.dataset.zh);
+
+  const draft = {
+    username, page, els, hobbies, standards,
+    score: _currentScore,
+    badge: document.getElementById("score-running-badge")?.style.display === "block",
+    grid: _isValidGrid(grid) ? grid : null,
+    gridText: currentText,
+  };
+  try {
+    localStorage.setItem(_DRAFT_KEY, JSON.stringify(draft));
+  } catch (_) {}
+}
+
+function _loadDraft() {
+  try {
+    const d = JSON.parse(localStorage.getItem(_DRAFT_KEY) || "null");
+    return d && _setupPageOrder.includes(d.page) && d.els ? d : null;
+  } catch (_) {
+    return null;
+  }
+}
+function _clearDraft() {
+  clearTimeout(_draftTimer);
+  try {
+    localStorage.removeItem(_DRAFT_KEY);
+  } catch (_) {}
+}
+
+// 输入 / 选择 / 点击（骰子动画约 1.1 秒）之后存一次；切到后台、关页面时马上存
+function _queueDraftSave() {
+  clearTimeout(_draftTimer);
+  _draftTimer = setTimeout(_saveDraft, 1500);
+}
+["input", "change", "pointerup"].forEach((t) => document.addEventListener(t, _queueDraftSave, true));
+document.addEventListener("visibilitychange", () => {
+  if (document.hidden) _saveDraft();
+});
+window.addEventListener("pagehide", _saveDraft);
+
+function _restoreDraft(d) {
+  const E = d.els;
+  const fire = (el, type) => el.dispatchEvent(new Event(type, { bubbles: true }));
+
+  // 1. 摇出来的几段其他关系是动态生成的，先把框放回去，值在下一步填
+  const ships = document.getElementById("rel-ships-list");
+  if (ships && E["rel-ships-list"]) {
+    ships.innerHTML = E["rel-ships-list"].html || "";
+    ships.dataset.count = E["rel-ships-list"].d?.count || "0";
+  }
+
+  // 2. 自己新加的爱好先重建（会清空自定义输入框，所以放在填值前面）
+  (d.hobbies || []).filter((t) => t.category).forEach((t) => {
+    if ([...document.querySelectorAll("#hobby-tags .hobby-tag")].some((el) => el.dataset.zh === t.zh)) return;
+    _pendingCustomTag = t.zh;
+    _pendingCustomContainerId = "hobby-tags";
+    _pendingCustomInputId = "hobby-custom-input";
+    confirmCustomHobbyTag(t.category, t.tier);
+  });
+  const pick = (sel, list) => document.querySelectorAll(sel).forEach((el) => el.classList.toggle("selected", list.includes(el.dataset.zh)));
+  pick("#hobby-tags .hobby-tag", (d.hobbies || []).map((t) => t.zh));
+  pick("#standards-tags .hobby-tag", d.standards || []);
+
+  // 3. 按页面顺序填值；下拉触发 change，下一级（种族、城市、身高）的选项才会生成
+  _setupEls().forEach((el) => {
+    const s = E[el.id];
+    if (!s || !("v" in s) || !el.matches("input, select, textarea")) return;
+    if (el.type === "checkbox") {
+      el.checked = !!s.v;
+      fire(el, "change");
+    } else if (el.tagName === "SELECT") {
+      if (!s.v || ![...el.options].some((o) => o.value === s.v)) return;
+      el.value = s.v;
+      fire(el, "change");
+    } else {
+      el.value = s.v;
+      if (el.type !== "hidden") fire(el, "input");
+    }
+  });
+
+  // 4. 骰子结果、剩余次数、显示/隐藏，照存的时候原样放回
+  _setupEls().forEach((el) => {
+    const s = E[el.id];
+    if (!s) return;
+    if (s.html != null && el.id !== "rel-ships-list") el.innerHTML = s.html;
+    if (s.d) Object.assign(el.dataset, s.d);
+    if (el.matches(".dice-roll-btn")) {
+      el.disabled = !!s.dis;
+      el.classList.toggle("dice-exhausted", !!s.x);
+    }
+    el.classList.toggle("hidden", !!s.h);
+  });
+  for (let i = 1; i <= 4; i++) {
+    const v = _val(`petMbti${i}`);
+    if (v) selectMbtiChar(`petMbti${i}`, v);
+  }
+  _syncShips();
+
+  // 5. 生日滚轮、画布、分数
+  const birth = _val("birthDisplay").split("-").map(Number);
+  if (birth.length === 3 && birth.every(Boolean)) [selectedYear, selectedMonth, selectedDay] = birth;
+  if (_isValidGrid(d.grid)) grid = d.grid;
+  currentText = d.gridText || "";
+  _currentScore = d.score ?? 100;
+  const badge = document.getElementById("score-running-badge");
+  if (badge && d.badge) {
+    badge.style.display = "block";
+    badge.textContent = `SCORE: ${_currentScore}`;
+  }
+
+  goTo(d.page);
+}
+
+// 打开 app 时：有没填完的草稿就问一下
+function _offerDraft() {
+  const d = _loadDraft();
+  if (!d) return;
+  const n = _setupPageOrder.indexOf(d.page) + 1;
+  const total = _setupPageOrder.length;
+  document.getElementById("draft-msg").textContent =
+    `上次的档案还没填完（第 ${n}/${total} 页）\n输入密码就能接着填\n` +
+    `Your profile isn't finished yet (page ${n}/${total}).\nEnter your password to pick up where you left off.`;
+  document.getElementById("draft-overlay").classList.remove("hidden");
+}
+function resumeDraft() {
+  document.getElementById("draft-overlay").classList.add("hidden");
+  _draftResume = _loadDraft();
+  if (!_draftResume) return;
+  document.getElementById("username").value = _draftResume.username;
+  goTo("login");
+  document.getElementById("password")?.focus();
+}
+function discardDraft() {
+  document.getElementById("draft-overlay").classList.add("hidden");
+  _draftResume = null;
+  _clearDraft();
 }
 
 // ── Per-page validation ──────────────────────────────────────
@@ -3375,6 +3567,7 @@ function createCard() {
         return;
       }
       _acceptLogin(data);
+      _clearDraft();
       // 拿到令牌后，把这次用到的自定义内容（种族、爱好、性别、性取向、城市）存进系统，之后所有人都能选到
       _saveCustomBreed("");
       if (isMixed) _saveCustomBreed("2");
@@ -4465,6 +4658,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   buildCitySelectors("parents-father");
   buildCitySelectors("parents-mother");
   _tryAutoLogin();
+  if (!_authToken) _offerDraft();
 });
 
 function rollIncomeTierDice() {

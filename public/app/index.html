@@ -41,6 +41,17 @@
       </div>
     </div>
 
+    <!-- 注册填到一半退出了：再打开时问要不要接着填（见 _offerDraft） -->
+    <div id="draft-overlay" class="custom-alert-overlay hidden">
+      <div class="custom-alert-box">
+        <p id="draft-msg"></p>
+        <div class="theme-name-btns">
+          <button class="nes-btn" onclick="discardDraft()">重新开始 Start over</button>
+          <button class="nes-btn is-primary" onclick="resumeDraft()">继续 Continue</button>
+        </div>
+      </div>
+    </div>
+
     <!-- 给「我的配色」起名 / 改名 -->
     <div id="theme-name-overlay" class="custom-alert-overlay hidden">
       <form class="custom-alert-box theme-name-box" onsubmit="event.preventDefault(); confirmThemeName();">
