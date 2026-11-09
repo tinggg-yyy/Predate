@@ -221,6 +221,7 @@ async function refreshRanking(thenShowUsername) {
       const p = _full.get(a.username);
       if (p) Object.assign(p, a);
     });
+    _cardCache.clear(); // 档案内容可能变了，弹幕用的缓存重算
     const data = activity.map((a) => _full.get(a.username)).filter(Boolean);
 
     const newRanking = data
@@ -364,12 +365,25 @@ function _dmSplit(text) {
   };
 }
 
+// cardValues 很贵（每次都会把像素头像画成 1024×1024 再 toDataURL，约 10ms），
+// 弹幕要对每个人的每一栏反复查，所以按人缓存一份；档案换了对象或者 refreshRanking 合进新数据时清掉
+const _cardCache = new Map();
+function _cardOf(p) {
+  let c = _cardCache.get(p.username);
+  if (!c || c._src !== p) {
+    c = cardValues(p, { perRow: Infinity });
+    c._src = p;
+    _cardCache.set(p.username, c);
+  }
+  return c;
+}
+
 // 某人某一栏现在填的内容（拆好中英）；查不到返回 null
 function _dmValue(username, field) {
   const p = _full.get(username);
   const f = _DM_FIELDS[field];
   if (!p || !f) return null;
-  const c = cardValues(p, { perRow: Infinity });
+  const c = _cardOf(p);
   let v = f[2] ? c[f[2]] : c.relRows.flat().find((it) => it[2] === field)?.[3];
   if (!v || v === "—") return null;
   v = String(v);
