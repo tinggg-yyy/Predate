@@ -135,7 +135,7 @@ function showSpotlight(idx) {
 
     <div class="card">
       ${row([cell("性别", "Gender", "gender", c.gender), cell("年龄", "Age", "age", c.age), cell("身高", "Height", "height", c.height)])}
-      ${row([cell("性取向", "Orientation", "orientation", c.orientation), cell("婚恋", "Status", "sterilized", c.status)])}
+      ${row([cell("性取向", "Orientation", "orientation", c.orientation), cell("婚恋", "Status", "sterilized", c.status), ...(c.neutered ? [cell("绝育", "Sterilized", "neutered", c.neutered)] : [])])}
       ${c.ships ? section("其他关系", "Other Ships", "ships", c.ships) : ""}
       ${row([cell("MBTI", "", "mbti", c.mbti), cell("星座", "Horoscope", "horoscope", c.horoscope)])}
 
@@ -148,7 +148,7 @@ function showSpotlight(idx) {
 
       ${section("兴趣爱好", "Hobbies", "hobby", c.hobby)}
       ${section("家庭状况", "Family", "parents", c.family)}
-      ${c.standards ? section("择偶标准", "Looking For", "standards", c.standards) : ""}
+      ${c.standards ? section("择偶标准", "Standards", "standards", c.standards) : ""}
     </div>
   `;
 
@@ -312,6 +312,7 @@ const _DM_FIELDS = {
   height: ["身高", "height", "height"],
   orientation: ["性取向", "orientation", "orientation"],
   sterilized: ["婚恋状态", "relationship status", "status"],
+  neutered: ["绝育状况", "sterilization", "neutered"],
   ships: ["其他关系", "other ships", "ships"],
   mbti: ["MBTI", "MBTI", "mbti"],
   horoscope: ["星座", "star sign", "horoscope"],
@@ -340,7 +341,7 @@ const _DM_FIELDS = {
   standards: ["择偶标准", "standards", "standards"],
 };
 // app 里跳过理由的标签（「物种/Species」「车/Vehicle」…）取中文那半，对到字段代号
-const _DM_LABEL_ALIAS = { 车: "vehicle", 领地: "hukou", 婚恋: "sterilized", 目的: "datingPurpose", 谈过: "pastRelCount", 前任联系: "exContact", 还爱前任: "stillLoveEx", 暧昧: "ambiguous", 境外伴侣: "foreignPartner", 异地伴侣: "otherCityPartner" };
+const _DM_LABEL_ALIAS = { 绝育: "neutered", 车: "vehicle", 领地: "hukou", 婚恋: "sterilized", 目的: "datingPurpose", 谈过: "pastRelCount", 前任联系: "exContact", 还爱前任: "stillLoveEx", 暧昧: "ambiguous", 境外伴侣: "foreignPartner", 异地伴侣: "otherCityPartner" };
 function _dmFieldOfLabel(label) {
   const zh = String(label || "").split("/")[0].trim();
   if (_DM_LABEL_ALIAS[zh]) return _DM_LABEL_ALIAS[zh];
@@ -486,9 +487,12 @@ const _SKIP_REASONS = [
   // 身高 Height
   "身高那栏直接划走了 / height column, immediate pass",
   "身高差距有点大 / height difference too much",
-  // 婚恋 Status / 绝育
+  // 婚恋 Status
   "婚恋状态不符合预期 / relationship status mismatch",
-  "绝育状况没达到预期 / sterilization status wasn't expected",
+  "婚恋那栏让它犹豫了 / relationship status gave it pause",
+  // 绝育 Sterilization
+  "绝育状况没达到预期 / sterilization status wasn't what it hoped",
+  "绝育那栏让它犹豫了 / sterilization status gave it pause",
   // MBTI
   "MBTI感觉不合 / MBTI clash",
   "MBTI看了直接跳过 / MBTI, instant skip",
@@ -521,7 +525,7 @@ const _SKIP_REASONS = [
   "子女那栏直接劝退 / kids section was a dealbreaker",
   "对孩子的态度不一致 / different views on kids",
   // 暗恋 / 暧昧 Crush & Ambiguous
-  "暗恋那栏有点在线 / crush section was a red flag",
+  "暗恋那栏亮了红灯 / crush section was a red flag",
   "暧昧对象太多了 / too many ambiguous relationships",
   // 秘密伴侣 Secret Partner
   "秘密伴侣那栏直接再见 / secret partner section, instant goodbye",
@@ -545,7 +549,7 @@ const _SKIP_REASONS = [
   "看了五秒感觉不是很合适 / 5 seconds, no spark",
   "第一印象太普通了 / first impression too plain",
   "直觉告诉它不行 / gut said no",
-  "好像见过面不太合拍 / vibe check failed",
+  "感觉气场不太合 / vibe check failed",
   "感觉对方不太在线 / they seem offline",
   "综合考量了一下算了 / considered it all, still passing",
   "头像看起来不太对味 / avatar wasn't its type",
@@ -685,80 +689,76 @@ const _AD_SUFFIX = [
   "今晚注定相遇！/ Tonight is the night!",
 ];
 
-function _buildCondition(p) {
-  const parts = [];
-  if (p.mbti) parts.push(p.mbti);
-  if (p.occupation) parts.push(p.occupation.split("/")[0].trim());
-  if (p.height) parts.push(p.height);
-  if (p.edu) parts.push(p.edu.split("/")[0].trim());
-  if (p.breed) parts.push(p.breed.split(" · ").pop().split("/")[0].trim());
-  const pick = parts.sort(() => Math.random() - 0.5).slice(0, 2);
-  return pick.length ? pick.join("、") : "优质";
+// 档案里的值「中文/English」「中文 / English」拆成两半（最后一个斜杠后面是英文）；拆不出来的两边都用原文。
+// 只有中文的值（学历「本科」这种）先用 disp 补上英文，和档案卡显示的一样
+function _tickBi(v) {
+  const s = String(disp(String(v || "").trim()) || "").trim();
+  const m = s.match(/^(.*[\u4e00-\u9fff].*?)\s*\/\s*([^\u4e00-\u9fff]+)$/);
+  return m ? { zh: m[1].trim(), en: m[2].trim() } : { zh: s, en: s };
 }
 
+// 随机挑两个条件（MBTI、职业、身高、学历、物种），中英文各一份
+function _buildCondition(p) {
+  const parts = [];
+  if (p.mbti) parts.push({ zh: p.mbti, en: p.mbti });
+  if (p.occupation) parts.push(_tickBi(p.occupation));
+  // 身高有的存成「160cm」，有的只有数字
+  if (p.height) { const h = /^\d+$/.test(p.height) ? `${p.height}cm` : String(p.height); parts.push({ zh: h, en: h }); }
+  if (p.edu) parts.push(_tickBi(p.edu));
+  if (p.breed) parts.push(_tickBi(p.breed.split(" · ").pop()));
+  const pick = parts.sort(() => Math.random() - 0.5).slice(0, 2);
+  if (!pick.length) return { zh: "优质", en: "Premium" };
+  return { zh: pick.map((x) => x.zh).join("、"), en: pick.map((x) => x.en).join(", ") };
+}
+
+// 每条字幕都是「完整的中文句子 / 完整的英文句子」
 function generateTickerMessages(profiles) {
   const msgs = [];
+  const push = (zh, en, type = "info") => msgs.push({ text: `${zh} / ${en}`, type });
 
   profiles.forEach((p) => {
     const name = p.name || p.username || "某兽";
+    const enName = p.name || p.username || "Someone";
     const score = (p.score ?? 60) - (p.skips?.length || 0);
     const cond = _buildCondition(p);
-    const seeking = _rnd(_AD_SEEKING);
-    const suffix = _rnd(_AD_SUFFIX);
+    const seeking = _tickBi(_rnd(_AD_SEEKING));
+    const suffix = _tickBi(_rnd(_AD_SUFFIX));
     const rel = p.relationship || {};
 
-    msgs.push({
-      text: `>> ${cond}的「${name}」正在寻觅${seeking}  ${suffix}`,
-      type: "info",
-    });
+    push(`>> ${cond.zh}的「${name}」正在寻觅${seeking.zh}，${suffix.zh}`,
+      `"${enName}" (${cond.en}) is looking for ${seeking.en}. ${suffix.en}`);
 
     if (p.hobby) {
-      const hobbyTag = p.hobby.split(/\s*·\s*/)[0].split("/")[0].trim();
-      msgs.push({
-        text: `${hobbyTag}的「${name}」在线求偶中 seeking connection`,
-        type: "info",
-      });
+      const h = _tickBi(p.hobby.split(/\s*·\s*/)[0]);
+      // 老档案的爱好只存了中文：到爱好表里查英文
+      if (h.en === h.zh) h.en = HOBBY_CATEGORIES.flatMap((c) => c.tags).find((t) => t.zh === h.zh)?.en || h.en;
+      push(`爱${h.zh}的「${name}」在线求偶中`, `"${enName}", into ${h.en}, is seeking a connection`);
     }
     if (rel.datingPurpose) {
-      msgs.push({
-        text: ` 「${name}」来这里是为了：${rel.datingPurpose} Here for: ${rel.datingPurpose.split("/").slice(1).join("/").trim() || rel.datingPurpose}`,
-        type: "info",
-      });
+      const d = _tickBi(rel.datingPurpose);
+      push(`「${name}」来这里是为了：${d.zh}`, `"${enName}" is here for: ${d.en}`);
     }
     if (p.likes && p.likes.length >= 5) {
-      msgs.push({
-        text: `「${name}」已收获 ${p.likes.length} 个心动 ${p.likes.length} admirers and counting`,
-        type: "like",
-      });
+      push(`「${name}」已收获 ${p.likes.length} 个心动`, `"${enName}" has ${p.likes.length} admirers and counting`, "like");
     }
     if (score >= 80) {
-      msgs.push({
-        text: `高分优质用户「${name}」评分 ${score}分 Premium profile Score: ${score}`,
-        type: "alert",
-      });
+      push(`高分优质用户「${name}」评分 ${score} 分`, `Premium profile "${enName}", score: ${score}`, "alert");
     }
     if (p.mixed && p.breed2) {
-      msgs.push({
-        text: `混血珍稀品种「${name}」${p.breed} x ${p.breed2} Mixed-heritage Rare find!`,
-        type: "info",
-      });
+      const b1 = _tickBi(p.breed.split(" · ").pop()), b2 = _tickBi(p.breed2.split(" · ").pop());
+      push(`混血珍稀品种「${name}」：${b1.zh} × ${b2.zh}`, `Rare mixed heritage "${enName}": ${b1.en} × ${b2.en}`);
     }
     if (isNonMammal(p.breed)) {
-      msgs.push({
-        text: `非哺乳类稀有物种「${name}」寻缘中 Non-mammal rarity seeking their match`,
-        type: "info",
-      });
+      push(`非哺乳类稀有物种「${name}」寻缘中`, `Non-mammal rarity "${enName}" is seeking their match`);
     }
     if (isNonStraight(p.orientation)) {
-      msgs.push({
-        text: `「${name}」${p.orientation}，寻觅同频的你 Seeking like-minded souls`,
-        type: "info",
-      });
+      const o = _tickBi(p.orientation);
+      push(`「${name}」${o.zh}，寻觅同频的你`, `"${enName}" (${o.en}) is seeking like-minded souls`);
     }
   });
 
   if (msgs.length === 0) {
-    msgs.push({ text: "优质兽人正在加载中  Loading quality anthros  Please stand by", type: "neutral" });
+    msgs.push({ text: "优质兽人正在加载中 / Loading quality anthros, please stand by", type: "neutral" });
   }
 
   return msgs.sort(() => Math.random() - 0.5);
@@ -819,7 +819,7 @@ socket.on("like-event", (data) => {
   }
 
   if (data.likesCount && data.likesCount % 5 === 0) {
-    pushTickerMessage(`「${data.name}」累计收到 ${data.likesCount} 个喜欢  "${data.name}" has ${data.likesCount} likes and counting`, "like");
+    pushTickerMessage(`「${data.name}」累计收到 ${data.likesCount} 个喜欢 / "${data.name}" has ${data.likesCount} likes and counting`, "like");
   }
 });
 

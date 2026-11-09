@@ -518,7 +518,7 @@ function validatePage(pageId) {
       };
       if (!checkBreedLevels("", "", "a ")) return false;
       const isMixed = document.getElementById("isMixed")?.checked;
-      if (isMixed && !checkBreedLevels("2", "第二族裔", "the 2nd heritage ")) return false;
+      if (isMixed && !checkBreedLevels("2", "第二族裔", "the 2nd heritage")) return false;
       const heightWrapper = document.getElementById("heightWrapper");
       if (heightWrapper && !heightWrapper.classList.contains("hidden")) {
         if (!document.getElementById("petHeight")?.value) {
@@ -549,6 +549,9 @@ function validatePage(pageId) {
       if (document.getElementById("petOrientation").value === "自定义/Custom" &&
           !_stripPunct(document.getElementById("orientation-custom")?.value).trim()) {
         showAlert("请填写自定义性取向！\nPlease enter your custom orientation."); return false;
+      }
+      if (!_val("petNeutered")) {
+        showAlert("请摇骰子选择是否绝育！\nPlease roll for sterilization."); return false;
       }
       return true;
     }
@@ -664,7 +667,7 @@ function validatePage(pageId) {
     case "profile-photo": {
       const word = (document.getElementById("text-input")?.value || "").trim();
       if (!word) {
-        showAlert("给自己一个字/词形容一下自己！\nGive yourself one word that is you."); return false;
+        showAlert("用一个字或一个词形容一下自己！\nGive yourself one word that is you."); return false;
       }
       return true;
     }
@@ -778,7 +781,7 @@ const FIELD_SCORES = {
   "rel-purpose": {
     "想认真恋爱/Looking for Love": +5, "探索一下/Just Exploring": 0, "被朋友安利/Friend's Rec": 0,
     "好玩/Just for Fun": -1, "打发时间/Killing Time": -1, "孤独/Lonely": -2, "刚分手/Just Broke Up": -3,
-    "炮友/FWB": -5, "一夜情/ONS": -6, "三人行/Threesome": -8, "和伴侣吵架了/Fight w/ Partner": -10,
+    "炮友/FWB": -5, "一夜情/ONS": -6, "三人行/Threesome": -8, "和伴侣吵架了/Just fought with my partner": -10,
   },
   // 想发展的关系
   "rel-goal": {
@@ -1084,11 +1087,11 @@ function rollGenericTierDice(btnId, displayId, inputId, tierMap, onRoll) {
 const REL_SHIPS = [
   ["正式对象", "relationship", "能发朋友圈、见家长那种", "the post-it-online, meet-the-parents kind"],
   ["暧昧拉扯", "situationship", "说不清，但就是舍不得删", "undefined, but you can't bring yourself to delete them"],
-  ["通勤点头之交", "station-ship", "每天地铁偶遇的「熟悉陌生人」", "the familiar stranger you see on the subway every day"],
+  ["通勤点头之交", "station-ship", "每天地铁偶遇的熟悉陌生人", "the familiar stranger you see on the subway every day"],
   ["旅途限定", "vacationship", "一起浪过，回城就删好友", "wild on the trip, unfriended back home"],
   ["聊天搭子", "conversationship", "天天聊天，却从不约出来", "chat every day, never meet up"],
   ["工位搭子", "workationship", "公司CP，离职就散场", "office couple, over when someone quits"],
-  ["等他回复", "waitationship", "一直等他表态的那位「备胎」", "the backup still waiting for them to commit"],
+  ["等他回复", "waitationship", "一直等他表态的那位备胎", "the backup still waiting for them to commit"],
   ["异地备胎", "locationship", "地图距离=心的距离", "map distance = heart distance"],
   ["教学型绑定", "educationship", "他讲我听，不一定是老师", "they teach, you listen, not necessarily a teacher"],
   ["拖着不谈", "procrastinationship", "谁都不说破，就这么耗着", "nobody says it out loud, so it just drags on"],
@@ -1127,14 +1130,35 @@ const REL_SHIPS = [
 const REL_SHIP_OPEN = ["开放关系", "open relationship", "有伴侣，但关系是开放的", "has a partner, but it's open"];
 const _shipValue = ([zh, en]) => `${zh} / ${en}`;
 
+// 有伴侣（恋爱中 / 已婚）才说得通的选项：「开放关系」「和伴侣吵架了」
+const _hasPartner = () => ["恋爱中/Dating", "已婚/Married"].includes(_val("petSterilized"));
+
 // 摇出来的其他关系池：恋爱中/已婚才可能摇到「开放关系」
 function _shipPool() {
-  const status = _val("petSterilized");
-  const withOpen = status === "恋爱中/Dating" || status === "已婚/Married";
-  return withOpen ? [REL_SHIP_OPEN, ...REL_SHIPS] : REL_SHIPS;
+  return _hasPartner() ? [REL_SHIP_OPEN, ...REL_SHIPS] : REL_SHIPS;
+}
+
+// 来这里的目的：单身 / 离异的人没有伴侣，摇到 6 点只会是「想认真恋爱」
+const REL_PURPOSE_FIGHT = "和伴侣吵架了/Just fought with my partner";
+function rollPurposeDice() {
+  const tiers = { ...HOUSING_TIERS.datingPurpose };
+  if (!_hasPartner()) tiers[6] = tiers[6].filter((v) => v !== REL_PURPOSE_FIGHT);
+  rollGenericTierDice("rel-purpose-dice-btn", "rel-purpose-display", "rel-purpose", tiers);
+}
+
+// 一个骰子回到没摇过的样子（id：值 input 的 id；按钮、显示框是 id-dice-btn / id-display）
+function _resetDice(id) {
+  const inp = document.getElementById(id);
+  const disp = document.getElementById(`${id}-display`);
+  const btn = document.getElementById(`${id}-dice-btn`);
+  if (inp) inp.value = "";
+  if (disp) disp.textContent = "—";
+  if (btn) { btn.dataset.rolls = "0"; btn.disabled = false; btn.classList.remove("dice-exhausted"); btn.innerHTML = diceFaceImg(6, 4); }
 }
 
 function onRelStatusChange() {
+  // 改成单身/离异：之前摇到的「和伴侣吵架了」作废，要重摇
+  if (_val("rel-purpose") === REL_PURPOSE_FIGHT && !_hasPartner()) _resetDice("rel-purpose");
   // 改成单身/离异：之前摇到的「开放关系」作废，那一段要重摇
   const pool = new Set(_shipPool().map(_shipValue));
   document.querySelectorAll("#rel-ships-list input[type=hidden]").forEach((inp) => {
@@ -1398,10 +1422,10 @@ const breedSubgroups = {
         "阿拉斯加雪橇犬 / Alaskan Malamute",
         "萨摩耶 / Samoyed",
         "金毛寻回犬 / Golden Retriever",
-        "拉布拉多寻回犬 / Dog (Labrador Retriever)",
+        "拉布拉多寻回犬 / Labrador Retriever",
         "德国牧羊犬 / German Shepherd",
-        "边境牧羊犬 / Dog (Border Collie)",
-        "古英格兰牧羊犬 / Dog (Old English Sheepdog)",
+        "边境牧羊犬 / Border Collie",
+        "古英格兰牧羊犬 / Old English Sheepdog",
         "柯基 / Corgi",
         "贵宾犬 / Poodle",
         "比熊犬 / Bichon Frise",
@@ -1411,19 +1435,19 @@ const breedSubgroups = {
         "英国斗牛犬 / English Bulldog",
         "松狮犬 / Chow Chow",
         "秋田犬 / Akita",
-        "柴犬 / Dog (Shiba Inu)",
+        "柴犬 / Shiba Inu",
         "西施犬 / Shih Tzu",
         "约克夏梗 / Yorkshire Terrier",
         "迷你雪纳瑞 / Miniature Schnauzer",
         "杜宾犬 / Doberman",
         "罗威纳犬 / Rottweiler",
         "拳师犬 / Boxer",
-        "大丹犬 / Dog (Great Dane)",
-        "圣伯纳犬 / Dog (Saint Bernard)",
-        "蝴蝶犬 / Dog (Papillon)",
-        "博美犬 / Dog (Pomeranian)",
-        "巴哥犬 / Dog (Pug)",
-        "罗素梗 / Dog (Russell Terrier)",
+        "大丹犬 / Great Dane",
+        "圣伯纳犬 / Saint Bernard",
+        "蝴蝶犬 / Papillon",
+        "博美犬 / Pomeranian",
+        "巴哥犬 / Pug",
+        "罗素梗 / Russell Terrier",
       ],
       "狼属 / Wolves": [
         "狼 / Wolf",
@@ -1635,7 +1659,7 @@ const breedData = {
     "鹈鹕 / Pelican",
     "鸽子 / Pigeon",
     "蛇鹫 / Secretarybird",
-    "虎头海雕 / Stellar's Sea Eagle",
+    "虎头海雕 / Steller's Sea Eagle",
     "天鹅 / Swan",
     "火鸡 / Turkey",
   ],
@@ -1645,7 +1669,7 @@ const breedData = {
     "变色龙 / Chameleon",
     "湾鳄 / Crocodile (Saltwater)",
     "暹罗鳄 / Crocodile (Siamese)",
-    "鳄蜥 / Crocodile Skink",
+    "鳄蜥 / Chinese Crocodile Lizard",
     "壁虎 / Gecko",
     "鬣蜥 / Iguana",
     "科莫多巨蜥 / Komodo Dragon",
@@ -1714,7 +1738,7 @@ const breedHeight = {
   "变色龙 / Chameleon": [70, 115],
   "蜥蜴 / Lizard": [70, 120],
   "石龙子 / Skink": [70, 120],
-  "鳄蜥 / Crocodile Skink": [70, 120],
+  "鳄蜥 / Chinese Crocodile Lizard": [70, 120],
   "蛇 / Snake": [100, 165],
   "响尾蛇 / Rattlesnake": [100, 160],
   "陆龟 / Tortoise": [90, 145],
@@ -1754,10 +1778,10 @@ const breedHeight = {
   "狐猴 / Lemur": [90, 148],
   "树懒 / Sloth": [90, 148],
   "考拉 / Koala": [115, 165],
-  "巴哥犬 / Dog (Pug)": [120, 163],
-  "蝴蝶犬 / Dog (Papillon)": [110, 158],
-  "博美犬 / Dog (Pomeranian)": [110, 155],
-  "罗素梗 / Dog (Russell Terrier)": [120, 163],
+  "巴哥犬 / Pug": [120, 163],
+  "蝴蝶犬 / Papillon": [110, 158],
+  "博美犬 / Pomeranian": [110, 155],
+  "罗素梗 / Russell Terrier": [120, 163],
   "腊肠犬 / Dachshund": [110, 155],
   "比格犬 / Beagle": [125, 165],
   "西施犬 / Shih Tzu": [110, 155],
@@ -1787,7 +1811,7 @@ const breedHeight = {
   "暹罗鳄 / Crocodile (Siamese)": [148, 198],
   // ── Medium (145–190) ──
   "狗 / Dog": [125, 188],
-  "柴犬 / Dog (Shiba Inu)": [138, 178],
+  "柴犬 / Shiba Inu": [138, 178],
   "柯基 / Corgi": [130, 168],
   "英国斗牛犬 / English Bulldog": [138, 175],
   "松狮犬 / Chow Chow": [143, 183],
@@ -1800,7 +1824,7 @@ const breedHeight = {
   "拳师犬 / Boxer": [163, 205],
   "罗威纳犬 / Rottweiler": [165, 210],
   "阿拉斯加雪橇犬 / Alaskan Malamute": [168, 213],
-  "边境牧羊犬 / Dog (Border Collie)": [148, 185],
+  "边境牧羊犬 / Border Collie": [148, 185],
   "狒狒 / Baboon": [148, 193],
   "山魈 / Mandrill": [153, 200],
   "猩猩 / Orangutan": [155, 200],
@@ -1836,8 +1860,8 @@ const breedHeight = {
   "斑海豹 / Spotted Seal": [135, 180],
   "海豚 / Dolphin": [155, 205],
   // ── Medium-large (163–215) ──
-  "拉布拉多寻回犬 / Dog (Labrador Retriever)": [158, 198],
-  "古英格兰牧羊犬 / Dog (Old English Sheepdog)": [158, 200],
+  "拉布拉多寻回犬 / Labrador Retriever": [158, 198],
+  "古英格兰牧羊犬 / Old English Sheepdog": [158, 200],
   "澳洲野犬 / Dingo": [150, 195],
   "非洲野犬 / African Wild Dog": [155, 200],
   "郊狼 / Coyote": [148, 193],
@@ -1850,7 +1874,7 @@ const breedHeight = {
   "黑豹 / Black Panther": [163, 208],
   "白头海雕 / Bald Eagle": [153, 198],
   "金雕 / Golden Eagle": [153, 198],
-  "虎头海雕 / Stellar's Sea Eagle": [158, 203],
+  "虎头海雕 / Steller's Sea Eagle": [158, 203],
   "大角羚 / Oryx": [168, 218],
   "霍加皮 / Okapi": [173, 223],
   "马鹿 / Red Deer": [173, 223],
@@ -1858,8 +1882,8 @@ const breedHeight = {
   "鲨鱼 / Shark": [168, 240],
   "湾鳄 / Crocodile (Saltwater)": [170, 228],
   // ── Large (183–240) ──
-  "圣伯纳犬 / Dog (Saint Bernard)": [173, 218],
-  "大丹犬 / Dog (Great Dane)": [178, 225],
+  "圣伯纳犬 / Saint Bernard": [173, 218],
+  "大丹犬 / Great Dane": [178, 225],
   "狼 / Wolf": [173, 218],
   "灰狼 / Wolf (Gray)": [173, 218],
   "白狼 / Wolf (White)": [173, 218],
@@ -2224,8 +2248,8 @@ const _GEO_CUSTOM = "__custom__";
 // [层级, 下拉提示, 标题]：每一级的标题单独一行，放在自己的下拉框上面
 const _GEO_LEVELS = [
   ["continent", "选择洲 / Select Continent...", "洲 Continent"],
-  ["country", "选择国家或地区 / Select Country or Region...", "国家/地区 Country/Region"],
-  ["division", "选择省或州 / Select Province or State...", "省/州 Province/State"],
+  ["country", "选择国家或地区 / Select Country or Region...", "国家/地区 Country or Region"],
+  ["division", "选择省或州 / Select Province or State...", "省/州 Province or State"],
   ["city", "选择城市 / Select City...", "城市 City"],
 ];
 const _geoPair = (s) => {
@@ -2618,6 +2642,15 @@ const HOUSING_TIERS = {
     high:   { 1:"100w", 2:"200w",  3:"350w",  4:"600w",  5:"1000w",  6:"1500w"  },
     luxury: { 1:"300w", 2:"600w",  3:"1000w", 4:"2000w", 5:"3000w",  6:"5000w+" },
   },
+  // 是否绝育：每种两面
+  neutered: {
+    1: "未绝育/Not Sterilized",
+    2: "未绝育/Not Sterilized",
+    3: "已绝育/Sterilized",
+    4: "已绝育/Sterilized",
+    5: "不透露/Prefer not to say",
+    6: "不透露/Prefer not to say",
+  },
   income: {
     1: "3k以下",
     2: "3k-8k",
@@ -2683,7 +2716,8 @@ const HOUSING_TIERS = {
     3: ["一夜情/ONS", "探索一下/Just Exploring"],
     4: ["好玩/Just for Fun", "想认真恋爱/Looking for Love"],
     5: ["三人行/Threesome", "被朋友安利/Friend's Rec"],
-    6: ["和伴侣吵架了/Fight w/ Partner", "想认真恋爱/Looking for Love"],
+    // 「和伴侣吵架了」只有恋爱中 / 已婚的人摇得到（见 rollPurposeDice）
+    6: ["和伴侣吵架了/Just fought with my partner", "想认真恋爱/Looking for Love"],
   },
   relationshipGoal: {
     1: ["结交朋友/Make Friends", "短期交友/Short-term Fling"],
@@ -3539,6 +3573,8 @@ function createCard() {
     parents: parentsData,
     relationship: relationshipData,
     sterilized: sterilized,
+    // 绝育（sterilized 这个名字早就被婚恋状况占用了）
+    neutered: document.getElementById("petNeutered")?.value || "",
     mbti: mbti,
     hobby: hobby,
     standards: standards,
@@ -4115,10 +4151,10 @@ function _tutDemoProfile() {
 // wide = 提示框宽一点（字多、不想换行的那一步）
 // merged = 写的看法和别人一模一样、被合并时，这一步改用这里的内容（盖掉同名的字段）
 const _TUT_STEPS = {
-  intro: { zh: "恭喜你已经建立完自己的档案了\n是时候正式开始使用了\n跟随指示熟悉一下所有的功能吧", en: "Welcome to the real deal!\nFollow the little notes and see what you can do here.", next: "longpress" },
+  intro: { zh: "恭喜你建好了自己的档案！\n现在正式开始吧\n跟着提示熟悉一下所有功能", en: "Welcome to the real deal!\nFollow the little notes and see what you can do here.", next: "longpress" },
   longpress: { target: () => _tutField(), open: true, zh: "长按「ENFP」\n写下你对它的理解\n（档案里每一栏都可以这样长按）", en: "Press and hold ENFP.\nWrite what it means to you.\n(You can do this on every field.)" },
   interpWrite: { popup: true, zh: "写下你的看法，毒舌一点也没关系～写完点确定", en: "Write what you think. Feel free to be a little mean. Tap OK when you're done." },
-  tap: { target: () => _tutField(), open: true, zh: "现在再点一下这里\n看看大家都是怎么理解的\n（每一栏都可以这样点开看）", en: "Now tap it again.\nLet's see what everyone else thinks.\n(Every field works this way too.)",
+  tap: { target: () => _tutField(), open: true, zh: "现在再点一下这里\n看看大家都是怎么理解的\n（一闪一闪的栏就是有人评论过的，点一下就能看）", en: "Now tap it again.\nLet's see what everyone else thinks.\n(Any field that's blinking has comments. Tap to read them.)",
     merged: { zh: "有人和你写的一模一样！\n再点一下这里，看看合并后的那句", en: "Someone wrote the exact same thing!\nTap it again to see your merged words." } },
   agree: { target: () => _tutBubbleArea(), open: true, zh: "谁说得有道理？点一下那句红字\n越多人认同，字就越大", en: "Someone make a good point? Tap their red words.\nThe more likes, the bigger they get.",
     // 合并已经算点过一次赞了，不用再教点红字，看一眼就继续
@@ -4132,7 +4168,7 @@ const _TUT_STEPS = {
   meInfo: { target: () => document.querySelector("#swipe-topbar > .nes-btn"), zh: "改档案、切语言、换皮肤、重看功能导览\n都在这里", en: "Edit your profile, switch languages and themes, or replay this tour.\nIt's all in here.", next: "likeBtn", wide: true },
   likeBtn: { target: () => _tutBtn(0), open: true, zh: "心动了吗？\n点这颗爱心，冲！", en: "Feeling the spark?\nHit that heart!" },
   warn: { popup: true, target: () => document.querySelector("#warning-overlay .warning-box"), zh: "哎呀，系统觉得这段关系有点危险\n但你要是铁了心，就继续吧", en: "Uh-oh. The system sees a little red flag.\nStill wanna go for it? Be our guest." },
-  opener: { popup: true, target: () => document.querySelector("#like-opener-popup .opener-modal"), zh: "选一句开场白，发给 ta！\n小心，有些话可是要扣分的", en: "Pick an opener and send it!\nCareful, some lines will cost you points." },
+  opener: { popup: true, target: () => document.querySelector("#like-opener-popup .opener-modal"), zh: "选一句开场白，发给 ta！\n说得好会加分，说得烂可是要扣分的", en: "Pick an opener and send it!\nGood lines earn points, bad ones cost you." },
   done: { zh: "好啦，功能导览结束！\n去认识你的下一位嘉宾吧", en: "And that's the tour!\nGo meet your next potential match. 👀", next: "finish", btn: ["开始", "Let's go"], noSkip: true },
 };
 // 进度编号只算纸上的步骤，不算弹窗里的提示
@@ -4741,7 +4777,7 @@ function renderCardHTML(profile) {
 ${section("名字", "Name", "name", c.name, "big")}
 ${section("物种", "Species", "breed", c.breed, "territory")}
 ${row([cell("性别", "Gender", "gender", c.gender), cell("年龄", "Age", "age", c.age), cell("身高", "Height", "height", c.height)])}
-${row([cell("性取向", "Orientation", "orientation", c.orientation), cell("婚恋", "Status", "sterilized", c.status)])}
+${row([cell("性取向", "Orientation", "orientation", c.orientation), cell("婚恋", "Status", "sterilized", c.status), ...(c.neutered ? [cell("绝育", "Sterilized", "neutered", c.neutered)] : [])])}
 ${c.ships ? section("其他关系", "Other Ships", "ships", c.ships) : ""}
 ${row([cell("MBTI", "", "mbti", c.mbti).replace(' <small class="en"></small>', "").replace('<span class="zh">MBTI</span>', "MBTI"), cell("星座", "Horoscope", "horoscope", c.horoscope)])}
 ${section("领地", "Territory", "hukou", c.territory, "territory")}
@@ -4752,7 +4788,7 @@ ${row([cell("目的", "Here For", "datingPurpose", c.datingPurpose), cell("期�
 ${c.relRows.map((r) => row(r.map(([zh, en, key, text]) => cell(zh, en, key, text)))).join("")}
 ${section("兴趣爱好", "Hobbies", "hobby", c.hobby)}
 ${section("家庭状况", "Family", "parents", c.family)}
-${c.standards ? section("择偶标准", "Looking For", "standards", c.standards) : ""}
+${c.standards ? section("择偶标准", "Standards", "standards", c.standards) : ""}
 
   <div class="section">
     <span class="label"><span class="zh">被喜欢</span> <small class="en">Liked</small></span>
@@ -4854,6 +4890,8 @@ let touchStartY = 0;
 
 function attachLabelHandlers(profileUsername, containerEl) {
   const container = containerEl || document.getElementById("swipe-container");
+  // 自己的档案（「我的档案」）：只能短按看别人写了什么，不能长按给自己写、也不能点红字给自己点赞
+  const isMine = !!currentUser && profileUsername === currentUser.username;
 
   // Remove old listeners by replacing the container node's cloned handlers
   // (simpler: just use a flag so we don't double-bind across showProfile calls)
@@ -4883,7 +4921,7 @@ function attachLabelHandlers(profileUsername, containerEl) {
     const enLine = clone.querySelector(".bi-en")?.textContent.trim() || zhLine;
     const labelTextLocked = { zh: zhLine, en: enLine };
 
-    if (_tutBlocks("longpress")) return;
+    if (_tutBlocks("longpress") || isMine) return;
     longPressTimer = setTimeout(() => {
       longPressTimer = null;
       longPressJustFired = true;
@@ -4922,6 +4960,7 @@ function attachLabelHandlers(profileUsername, containerEl) {
     // Tapping a red bubble → agree (max 2 per user, persisted to server)
     const bubble = e.target.closest(".interp-bubble");
     if (bubble) {
+      if (isMine) return;
       const myAgrees = parseInt(bubble.dataset.myAgrees || "0");
       if (myAgrees >= 2) return;
       const fieldSpan = bubble.closest(".value[data-field]");
@@ -5261,16 +5300,16 @@ const carnivoreSpecies = new Set([
   "暹罗鳄 / Crocodile (Siamese)",
   "澳洲野犬 / Dingo",
   "狗 / Dog",
-  "边境牧羊犬 / Dog (Border Collie)",
-  "大丹犬 / Dog (Great Dane)",
-  "拉布拉多寻回犬 / Dog (Labrador Retriever)",
-  "古英格兰牧羊犬 / Dog (Old English Sheepdog)",
-  "蝴蝶犬 / Dog (Papillon)",
-  "博美犬 / Dog (Pomeranian)",
-  "巴哥犬 / Dog (Pug)",
-  "罗素梗 / Dog (Russell Terrier)",
-  "圣伯纳犬 / Dog (Saint Bernard)",
-  "柴犬 / Dog (Shiba Inu)",
+  "边境牧羊犬 / Border Collie",
+  "大丹犬 / Great Dane",
+  "拉布拉多寻回犬 / Labrador Retriever",
+  "古英格兰牧羊犬 / Old English Sheepdog",
+  "蝴蝶犬 / Papillon",
+  "博美犬 / Pomeranian",
+  "巴哥犬 / Pug",
+  "罗素梗 / Russell Terrier",
+  "圣伯纳犬 / Saint Bernard",
+  "柴犬 / Shiba Inu",
   "海豚 / Dolphin",
   "耳廓狐 / Fennec Fox",
   "雪貂 / Ferret",
@@ -5305,7 +5344,7 @@ const carnivoreSpecies = new Set([
   "蛇 / Snake",
   "鳄龟 / Snapping Turtle",
   "斑海豹 / Spotted Seal",
-  "虎头海雕 / Stellar's Sea Eagle",
+  "虎头海雕 / Steller's Sea Eagle",
   "白鼬 / Stoat",
   "老虎 / Tiger",
   "孟加拉虎 / Tiger (Bengal)",
@@ -5580,6 +5619,31 @@ function buildWarnings(me, target) {
     }
   }
 
+  // 绝育 × 择偶标准：一方的择偶标准要求「已绝育」，另一方没绝育 / 不肯说（老档案没有绝育这一项就不提醒）
+  const wantsNeutered = (p) => (p.standards || "").split(" · ").some((s) => s.startsWith("已绝育"));
+  const neuterState = (p) => (p.neutered || "").split("/")[0];
+  const theirs = neuterState(target), mine = neuterState(me);
+  if (wantsNeutered(me) && theirs && theirs !== "已绝育") {
+    warnings.push(theirs === "未绝育"
+      ? { level: "critical", lines: [
+          "对方没有绝育 / Your match is not sterilized",
+          "这不符合你的择偶标准 / That doesn't meet your standards",
+          "请做好意外繁殖的心理准备 / Be ready for unplanned offspring",
+        ] }
+      : { level: "warning", lines: [
+          "对方不愿透露是否绝育 / Your match won't say if they're sterilized",
+          "你的择偶标准要求对方已绝育 / Your standards require a sterilized partner",
+          "建议当面问清楚 / Better ask them in person",
+        ] });
+  }
+  if (wantsNeutered(target) && mine && mine !== "已绝育") {
+    warnings.push({ level: "warning", lines: [
+      "对方的择偶标准要求伴侣已绝育 / Their standards require a sterilized partner",
+      mine === "未绝育" ? "而你没有绝育 / And you're not sterilized" : "而你没有透露 / And you haven't said",
+      "被拒绝的概率很高 / Expect a likely rejection",
+    ] });
+  }
+
   return warnings;
 }
 
@@ -5618,57 +5682,7 @@ let _selectedOpener = null;
 let _selectedOpenerType = null;
 let _selectedOpenerText = null; // 发出去的是双语全文，收到的人按自己的语言看
 
-const OPENER_FIXED = [
-  // normal — no penalty
-  { zh: "你多高呀", en: "How tall are you?", type: "normal" },
-  { zh: "你是哪里人呀", en: "Where are you from?", type: "normal" },
-  { zh: "在哪里工作呀", en: "Where do you work?", type: "normal" },
-  { zh: "平时几点睡呀", en: "What time do you sleep?", type: "normal" },
-  { zh: "平时喜欢宅在家吗", en: "Homebody or go-out type?", type: "normal" },
-  { zh: "你平时去哪里溜达", en: "Where do you hang out?", type: "normal" },
-  { zh: "你最近在忙什么", en: "What keeps you busy?", type: "normal" },
-  // weird/anthro — penalty -5
-  { zh: "你会咬人吗", en: "Do you bite?", type: "weird" },
-  { zh: "你的尾巴多长", en: "How long is your tail?", type: "weird" },
-  { zh: "你冬天会冬眠吗", en: "Do you hibernate?", type: "weird" },
-  { zh: "你的毛是天然色吗", en: "Is your fur natural?", type: "weird" },
-  { zh: "我梦见你了", en: "I dreamed of you", type: "weird" },
-  { zh: "你身上香吗", en: "Do you smell nice?", type: "weird" },
-  { zh: "你咬人疼吗", en: "Does your bite hurt?", type: "weird" },
-  { zh: "看起来好好抱", en: "You look so huggable", type: "weird" },
-  { zh: "宝宝你好美", en: "Babe, you're gorgeous", type: "weird" },
-  { zh: "你是食草还是食肉的", en: "Herbivore or carnivore?", type: "weird" },
-  { zh: "你有没有换过毛色", en: "Ever dyed your fur?", type: "weird" },
-  { zh: "你毛多还是毛少", en: "Fluffy or sleek?", type: "weird" },
-  { zh: "你的爪子锋利吗", en: "Are your claws sharp?", type: "weird" },
-  { zh: "你平时用四肢走路吗", en: "Do you walk on all fours?", type: "weird" },
-  // boring — penalty -3
-  { zh: "你好呀", en: "Hello~", type: "boring" },
-  { zh: "你好", en: "Hi", type: "boring" },
-  { zh: "hihi", en: "", type: "boring" }, // 中英文一样，只显示一次
-  { zh: "哈喽", en: "Hey there", type: "boring" },
-  { zh: "在吗", en: "You there?", type: "boring" },
-  { zh: "嗨", en: "Hey", type: "boring" },
-  { zh: "哈喽哈喽", en: "Hellooo", type: "boring" },
-  { zh: "在忙吗", en: "Busy?", type: "boring" },
-  { zh: "好可爱", en: "So cute", type: "boring" },
-  { zh: "好帅", en: "So handsome", type: "boring" },
-  { zh: "好酷", en: "So cool", type: "boring" },
-  { zh: "好萌", en: "Adorable", type: "boring" },
-  { zh: "好喜欢", en: "Really into you", type: "boring" },
-  // flagged — penalty -10
-  { zh: "睡了吗", en: "You awake?", type: "flagged" },
-  { zh: "你一个人住吗", en: "Do you live alone?", type: "flagged" },
-  { zh: "发我你的照片", en: "Send me your photos", type: "flagged" },
-  { zh: "好近呀", en: "You're so close by", type: "flagged" },
-  { zh: "约吗", en: "Wanna hook up?", type: "flagged" },
-  { zh: "看起来好好吃", en: "You look delicious", type: "flagged" },
-  { zh: "你会有反差吗", en: "Got a hidden wild side?", type: "flagged" },
-  { zh: "你看起来很反差", en: "Bet you're wild behind that face", type: "flagged" },
-  { zh: "wechat plz", en: "", type: "flagged" }, // 中英文一样，只显示一次
-  { zh: "你的v呢", en: "What's your WeChat?", type: "flagged" },
-  { zh: "可以要你的v吗", en: "Can I get your WeChat?", type: "flagged" },
-];
+// 固定开场白 OPENER_FIXED、加减分 OPENER_SCORES 在 shared/openers.js（服务器也按它给发送的人加减分）
 
 // 按对方档案生成的开场白（双语）；拆不出英文的（比如自定义爱好）英文里就用原词
 function _genProfileOpeners(p) {
@@ -5718,7 +5732,7 @@ function openLikeOpenerPopup() {
   const makeChipHtml = (list) =>
     list
       .map(({ zh, en, type }) => {
-        const display = en ? `${zh} / ${en}` : zh;
+        const display = openerText({ zh, en });
         return `<span class="opener-chip opener-${type}" data-key="${escapeHtml(zh)}" data-type="${type}" data-display="${escapeHtml(display)}">${escapeHtml(display)}</span>`;
       })
       .join("");
@@ -5775,9 +5789,13 @@ function submitLikeOpener() {
 
   closeLikeOpenerPopup();
 
-  // 教学里的示范档案：不存进发件箱（api 那边也不会真的发出去）
-  if (currentUser && !_tutIsDemo(target)) {
+  // 教学里的示范档案：不存进发件箱（api 那边也不会真的发出去），分数也不变，只演示一下加减分
+  if (_tutIsDemo(target)) {
+    const delta = OPENER_SCORES[type];
+    if (delta) setTimeout(() => showScoreDelta(delta), 400);
+  } else if (currentUser) {
     _cacheOutbox(currentUser.username, currentUser.name, target.username, target.name, text);
+    // opener：告诉服务器这是点喜欢时的开场白，服务器按 shared/openers.js 的分类给自己加减分（存进档案，排行榜跟着变）
     api("/messages", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -5787,20 +5805,19 @@ function submitLikeOpener() {
         to: target.username,
         toName: target.name,
         content: text,
+        opener: true,
       }),
-    });
+    })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => {
+        if (!d?.scoreDelta) return;
+        currentUser.score = d.score;
+        setTimeout(() => showScoreDelta(d.scoreDelta), 400);
+      })
+      .catch(() => {});
   }
 
   doLike("开场白", text);
-
-  const penalties = { boring: -3, weird: -5, flagged: -10 };
-  const delta = penalties[type];
-  if (delta) {
-    _currentScore += delta;
-    const badge = document.getElementById("score-running-badge");
-    if (badge) badge.textContent = `SCORE: ${_currentScore}`;
-    setTimeout(() => showScoreDelta(delta), 400);
-  }
 }
 
 function like() {
@@ -6006,11 +6023,12 @@ function _isCannedMsg(content) {
       ..._FAKE_MSG_POOL, ..._MIXED_BLOOD_MSG_POOL, ..._SINGLE_QUESTION_POOL,
       ...Object.values(_BREED_MSG_POOLS).flat(),
       ...[..._FAKE_ALERT_POOL, ..._MIXED_BLOOD_ALERT_POOL].map((a) => a.content),
-      ...OPENER_FIXED.map((o) => (o.en ? `${o.zh} / ${o.en}` : o.zh)),
+      ...OPENER_FIXED.map(openerText),
     ]);
   }
   return (
     _cannedMsgs.has(content) ||
+    OPENER_PROFILE_RE.test(content) ||
     /^(我也喜欢.+！ \/ I like .+ too!|.+ 的你好！ \/ Hi there, .+!|做.+是什么感觉？ \/ What's it like being a .+\?|原来你是 .+！ \/ Oh, you're an? .+!|.+的工作累不累？ \/ .+, huh\? Is the job tiring\?|不用上班是什么感觉？ \/ What's it like not having to work\?)$/.test(content)
   );
 }
@@ -6527,7 +6545,7 @@ const _FAKE_MSG_POOL = [
   "你的兽人画像是自己画的吗？好厉害！ / Did you draw your anthro portrait yourself? So talented!",
   "嗨，我喜欢你的爱好，我们有很多共同点 / Hi, I love your hobbies, we have so much in common",
   "你好漂亮，敢问芳名吗？ / You're gorgeous, may I ask your name?",
-  "我摇了个超级好的地产，想请你来参观 / I rolled an amazing property, I'd love to show you around",
+  "我摇到了一套超好的房子，想请你来参观 / I rolled an amazing property, I'd love to show you around",
   "你的MBTI是我最喜欢的类型！！ / Your MBTI is my favorite type!!",
   "嗨，你是我今天看到最好看的档案 ✨ / Hey, you're the best-looking profile I've seen today ✨",
   "我在附近，要不要出来喝杯咖啡 ☕ / I'm nearby, want to grab a coffee? ☕",
@@ -6542,10 +6560,10 @@ const _FAKE_MSG_POOL = [
   "我可以请你吃顿饭吗？我很会做菜的 / Can I treat you to dinner? I'm a really good cook",
   "你的档案分数好高，你一定是个很好的伴侣 / Your profile score is so high, you must be a great partner",
   "我刷了好几遍才鼓起勇气来打招呼 / I scrolled past you several times before I worked up the courage to say hi",
-  "你好，我也是喜欢夜晚活动的…… / Hi, I'm a night owl too...",
+  "你好，我也是个夜猫子…… / Hi, I'm a night owl too...",
   "我们住得很近！要不要见个面？ / We live really close! Wanna meet up?",
   "你的耳朵好好看，是真的还是造型？ / Your ears are so pretty, are they real or styled?",
-  "看到你滑过去了，赶紧搜到你打招呼 / Saw you slip past, so I searched you up to say hi",
+  "看到你一下就滑过去了，赶紧把你搜出来打个招呼 / Saw you slip past, so I searched you up to say hi",
   "我平时很内向，但你的档案让我忍不住 / I'm usually really shy, but your profile made me do it",
   "你有在养其他宠物吗，还是你自己就是宠物型的 / Do you keep other pets, or are you the pet type yourself?",
   "嗨，你好，我是附近的狼，请多关照 / Hey hi, I'm the wolf from around here, nice to meet you",
@@ -6579,7 +6597,7 @@ const _MIXED_BLOOD_MSG_POOL = [
   "混血档案……说实话我一般不太考虑的，不好意思 / Mixed profiles... honestly I don't usually consider them, sorry",
   "我家里人接受不了混血的，这个我没办法 / My family can't accept mixed heritage, nothing I can do",
   "你是哪两个种族的混血？一般来说这个很重要 / Which two species are you mixed with? That usually matters a lot",
-  "混血的话感觉基因比较复杂，你身体一般健康吗 / Mixed genes seem kind of complicated, are you generally healthy?",
+  "混血的话感觉基因比较复杂，你身体还健康吗 / Mixed genes seem kind of complicated, are you generally healthy?",
   "我之前交往过混血的，结果很不好，不太想再试了 / I dated someone mixed before and it went badly, I'd rather not try again",
   "混血感觉挺特别的，但我家里比较传统 / Mixed heritage seems pretty unique, but my family is traditional",
   "你的档案分数这么低，是因为混血那条吗 / Is your score this low because of the mixed-heritage thing?",
@@ -6624,7 +6642,7 @@ const _BREED_MSG_POOLS = {
     "你喜欢爬树吗，大熊猫好像还挺会爬的 / Do you like climbing trees? Pandas seem pretty good at it",
   ],
   小熊猫: [
-    "小熊猫！颜色这么好看，感觉像秋天的颜色 / A red panda! Your colors are gorgeous, like autumn",
+    "小熊猫！毛色这么好看，像秋天一样 / A red panda! Your colors are gorgeous, like autumn",
     "你的尾巴有条纹吗，好想看看 / Is your tail striped? I'd love to see it",
     "小熊猫感觉特别灵巧，平时喜欢爬高处吗 / Red pandas seem so nimble, do you like climbing high places?",
     "你喜欢吃什么，小熊猫应该很挑食吧 / What do you like to eat? Red pandas must be picky eaters",
@@ -6659,15 +6677,15 @@ const _BREED_MSG_POOLS = {
     "美洲豹！感觉很有力量感的种族 / A jaguar! Such a powerful species",
     "你的花纹是玫瑰形的斑点吗，好特别 / Are your spots those rosette shapes? So unique",
     "美洲豹会游泳对吗，你喜欢水吗 / Jaguars can swim, right? Do you like water?",
-    "你力气很大吧，保护起自己在乎的人一定很有力 / You must be really strong, I bet you're great at protecting the ones you care about",
+    "你力气很大吧，被你保护一定很有安全感 / You must be really strong, I'd feel so safe with you",
     "美洲豹感觉特别沉稳，不轻易动怒对吗 / Jaguars seem so steady, not easily angered, right?",
     "你在感情里是主动还是被动的那一方 / In relationships, are you the one who makes the first move?",
   ],
   猫头鹰: [
-    "猫头鹰！夜视能力是最好的之一，好厉害 / An owl! One of the best night visions out there, amazing",
+    "猫头鹰！夜视能力数一数二，好厉害 / An owl! One of the best night visions out there, amazing",
     "你的头真的可以转将近270度吗，想亲眼见见 / Can your head really turn almost 270 degrees? I want to see it",
     "猫头鹰白天睡觉，那你晚上是不是特别活跃 / Owls sleep in the day, so are you extra active at night?",
-    "你的羽毛飞起来很安静对吗，完全听不到声音 / Your feathers are totally silent in flight, right?",
+    "听说你飞起来完全没有声音，是真的吗 / I heard you fly in total silence, is that true?",
     "猫头鹰感觉特别智慧，跟你聊天感觉会学到很多 / Owls seem so wise, I bet I'd learn a lot talking to you",
     "你会发出什么声音，是那种低沉的叫声吗 / What sounds do you make? That deep hooting kind?",
   ],
@@ -6675,7 +6693,7 @@ const _BREED_MSG_POOLS = {
     "猫鼬！感觉特别机警的种族，什么都逃不过你们 / A meerkat! Such an alert species, nothing gets past you",
     "猫鼬能免疫蛇毒吗，这个真的很厉害 / Are meerkats really immune to snake venom? That's incredible",
     "你平时是群居的吗，猫鼬感觉很有团队意识 / Do you live in a group? Meerkats seem like real team players",
-    "你站起来两足直立的时候一定很可爱 / You must look so cute standing up on two legs",
+    "你两脚站起来的时候一定很可爱 / You must look so cute standing up on two legs",
     "猫鼬感觉特别机灵，你聊天反应也这么快吗 / Meerkats seem so clever, are you this quick when chatting too?",
   ],
   麝香猫: [
@@ -6683,7 +6701,7 @@ const _BREED_MSG_POOLS = {
     "你是夜行性的吗，白天一般在做什么 / Are you nocturnal? What do you usually do during the day?",
     "麝香猫感觉很有个性，不太好驯服那种 / Civets seem so independent, the hard-to-tame type",
     "你的嗅觉很灵敏吗，麝香猫感觉气息很独特 / Is your sense of smell really sharp? Civets have such a distinct scent",
-    "遇到麝香猫很少见，今天鼓起勇气打招呼 / Civets are so rare to meet, I worked up the courage to say hi today",
+    "很少遇到麝香猫，今天鼓起勇气来打个招呼 / Civets are so rare to meet, I worked up the courage to say hi today",
   ],
   龙猫: [
     "龙猫！南美洲的小可爱，你的毛一定超软 / A chinchilla! South America's little cutie, your fur must be so soft",
@@ -6695,7 +6713,7 @@ const _BREED_MSG_POOLS = {
   ],
   狐猫: [
     "狐猫！感觉很奇特的种族，名字很有趣 / A fossa! Such an unusual species, fun name too",
-    "你是晨昏活动型的吗，两头活跃 / Are you crepuscular? Active at dawn and dusk?",
+    "你是晨昏活动型的吗，早晚最活跃那种 / Are you crepuscular? Active at dawn and dusk?",
     "感觉狐猫不太常见，很高兴能认识你 / Fossas seem pretty rare, really happy to meet you",
   ],
   狐猴: [
@@ -6710,7 +6728,7 @@ const _BREED_MSG_POOLS = {
     "耳廓狐！耳朵好大好好看，比脑袋还大吗 / A fennec fox! Your ears are so big, bigger than your head?",
     "你的耳朵是用来散热的吗，好聪明的设计 / Are your ears for cooling off? What a clever design",
     "耳廓狐感觉特别可爱，你平时爱撒娇吗 / Fennecs are so adorable, are you clingy and sweet?",
-    "你是沙漠适应型的，城市里会不会太潮湿 / You're built for the desert, is the city too humid for you?",
+    "你是适应沙漠的，在城市里会不会觉得太潮湿 / You're built for the desert, is the city too humid for you?",
     "看到你的档案第一反应就是耳朵，太特别了 / The first thing I noticed on your profile was the ears, so unique",
     "你体型很小吗，感觉耳廓狐都小小的 / Are you small? Fennec foxes all seem so tiny",
   ],
@@ -6735,8 +6753,8 @@ const _BREED_MSG_POOLS = {
     "你的身高很高吗，长颈鹿都这么高挑吗 / Are you really tall? Are all giraffes this tall and slender?",
     "你喝水的时候腿要叉开吗，好有趣 / Do you have to spread your legs to drink water? So funny",
     "长颈鹿的舌头是紫色的对吗，为什么 / Giraffe tongues are purple, right? Why is that?",
-    "你的斑纹图案是独特的吗，每只都不同 / Is your pattern unique? Every giraffe's is different",
-    "遇到长颈鹿感觉很特别，今天打招呼了 / Meeting a giraffe feels so special, so I said hi today",
+    "听说每只长颈鹿的斑纹都不一样，你的是什么样的 / I heard every giraffe's pattern is different, what's yours like?",
+    "第一次遇到长颈鹿，忍不住来打个招呼 / My first giraffe! Couldn't help saying hi",
   ],
   仓鼠: [
     "仓鼠！超可爱，脸颊是鼓鼓的那种吗 / A hamster! So cute, do you have those puffy cheeks?",
@@ -6757,8 +6775,8 @@ const _BREED_MSG_POOLS = {
     "鼯鼠！会滑翔的松鼠，好厉害 / A flying squirrel! A squirrel that glides, amazing",
     "你展开翼膜滑翔的样子一定很帅，想看看 / You must look so cool gliding with your membranes spread, I want to see",
     "你能滑翔多远，有没有什么记录 / How far can you glide? Do you have a record?",
-    "鼯鼠是夜行性的吗，夜晚出来活动 / Are flying squirrels nocturnal? Out and about at night?",
-    "感觉鼯鼠特别特别，不常见到，很高兴认识你 / Flying squirrels are so special and rare, really happy to meet you",
+    "鼯鼠是夜行性的吗，晚上才出来活动 / Are flying squirrels nocturnal? Out and about at night?",
+    "鼯鼠好少见，很高兴认识你 / Flying squirrels are so special and rare, really happy to meet you",
   ],
   松鼠: [
     "松鼠！感觉特别活泼好动的种族 / A squirrel! Such a lively, energetic species",
@@ -6793,7 +6811,7 @@ const _BREED_MSG_POOLS = {
   ],
   // ── General species ──
   狼: [
-    "你是狼的吗，我从小就觉得狼是最酷的种族 / Are you a wolf? I've always thought wolves were the coolest species",
+    "你是狼吗，我从小就觉得狼是最酷的种族 / Are you a wolf? I've always thought wolves were the coolest species",
     "狼都这么好看吗，我有点心跳加速 / Are all wolves this good-looking? My heart's racing a bit",
     "据说狼特别忠诚，是真的吗？ / They say wolves are super loyal, is that true?",
     "你平时是群居还是独行？狼感觉很神秘 / Are you a pack animal or a lone wolf? Wolves seem so mysterious",
@@ -6837,11 +6855,11 @@ const _BREED_MSG_POOLS = {
     "你有没有在打盹的时候露出肚皮的习惯 / Do you show your belly when you nap?",
     "虎是百兽之王，那你在感情里也是强势的那一方吗？ / Tigers are kings of the jungle, so are you the dominant one in relationships too?",
     "我觉得虎特别帅，看到你的档案就直接打招呼了 / Tigers are so handsome, I said hi the moment I saw your profile",
-    "你的爪子平时收起来的吗？ / Do you keep your claws retracted normally?",
-    "虎力量很大吧，保护喜欢的人一定很有力 / Tigers are so strong, you must be great at protecting the one you like",
+    "你的爪子平时是收起来的吗？ / Do you keep your claws retracted normally?",
+    "虎力量很大吧，被你保护一定很有安全感 / Tigers are so strong, I'd feel so safe with you",
   ],
   豹: [
-    "豹！速度最快的种族，你跑步一定很厉害 / A leopard! The fastest species, you must be a great runner",
+    "豹！感觉特别矫健的种族，你跑步一定很厉害 / A leopard! So agile, you must be a great runner",
     "你是猎豹还是花豹还是雪豹？都好喜欢 / Are you a cheetah, a leopard, or a snow leopard? I love them all",
     "豹的花纹是每只都不一样的吗？ / Is every leopard's pattern different?",
     "豹感觉很孤傲，你平时朋友多吗 / Leopards seem so aloof, do you have many friends?",
@@ -6849,7 +6867,7 @@ const _BREED_MSG_POOLS = {
     "豹反应速度这么快，打游戏一定很厉害 / Leopards react so fast, you must be great at games",
     "我觉得豹是最有美感的猫科种族，线条太好看了 / Leopards are the most beautiful felines, those lines are gorgeous",
     "你有没有喜欢独处的倾向？豹感觉很享受独处 / Do you tend to like being alone? Leopards seem to enjoy solitude",
-    "豹眼神很锐利，看到你档案感觉被扫视到了 / Leopards have such sharp eyes, I felt scanned just looking at your profile",
+    "豹眼神很锐利，看你档案的时候感觉被你盯住了 / Leopards have such sharp eyes, I felt you staring right at me through your profile",
     "雪豹的话，你能适应城市生活吗，还是更喜欢山地 / If you're a snow leopard, can you handle city life, or do you prefer mountains?",
   ],
   狮: [
@@ -6860,13 +6878,13 @@ const _BREED_MSG_POOLS = {
     "我喜欢狮子那种泰然自若的感觉，很有领袖气质 / I love that calm, composed lion vibe, such a natural leader",
     "你懒得动的时候是什么样子的 / What do you look like when you're too lazy to move?",
     "狮子会撒娇吗？感觉你们很骄傲 / Do lions act cute? You all seem so proud",
-    "你是那种睡觉特别能睡的狮子吗 / Are you the kind of lion that can sleep forever?",
+    "你是那种特别能睡的狮子吗 / Are you the kind of lion that can sleep forever?",
     "狮子在感情里是主动还是被动的那一方？ / Are lions the ones who make the first move in relationships?",
     "跟狮子在一起感觉会很有安全感，我很心动 / Being with a lion would feel so safe, my heart's fluttering",
   ],
   熊猫: [
     "熊猫！！太可爱了我直接打招呼 / A panda!! Too cute, I had to say hi",
-    "你真的很喜欢吃竹子吗？还是这个是刻板印象 / Do you really love bamboo? Or is that a stereotype?",
+    "你真的很喜欢吃竹子吗？还是这只是刻板印象 / Do you really love bamboo? Or is that a stereotype?",
     "熊猫是不是特别受欢迎，你一定收到很多消息吧 / Pandas must be super popular, you must get tons of messages",
     "你的眼圈是天生的吗，好特别好好看 / Are your eye patches natural? So unique and pretty",
     "听说熊猫脾气很好而且特别可爱，你是这样的吗 / I heard pandas are good-tempered and super cute, are you like that?",
@@ -6877,10 +6895,10 @@ const _BREED_MSG_POOLS = {
   熊: [
     "熊！！感觉超有安全感的 / A bear!! You feel so safe",
     "你平时冬眠吗？还是已经进化到不需要冬眠了 / Do you hibernate? Or have you evolved past that?",
-    "熊拥抱起来一定很舒服，好想试试 / Bear hugs must feel amazing, I want to try",
+    "熊抱起来一定很舒服，好想试试 / Bear hugs must feel amazing, I want to try",
     "你是什么熊？棕熊还是黑熊还是北极熊？ / What kind of bear are you? Brown, black, or polar?",
     "听说熊脾气很好，只要不激怒就很温和，是吗 / I heard bears are gentle as long as you don't provoke them, true?",
-    "你有没有很喜欢蜂蜜的习惯 / Do you have a thing for honey?",
+    "你是不是特别爱吃蜂蜜 / Do you have a thing for honey?",
     "熊看起来憨厚但其实很聪明对吗 / Bears look goofy but are actually really smart, right?",
     "我觉得熊是最让人放心的种族之一，想认识你 / Bears are one of the most reassuring species, I'd love to meet you",
     "你睡觉的时候会蜷缩成一团吗？ / Do you curl up into a ball when you sleep?",
@@ -6890,13 +6908,13 @@ const _BREED_MSG_POOLS = {
     "兔子！跑得最快的小型种族对吗 / A rabbit! The fastest small species, right?",
     "你的耳朵是竖着的还是垂着的？都好可爱 / Are your ears upright or floppy? Both are so cute",
     "兔子害怕的时候会把耳朵压下来吗 / Do rabbits flatten their ears when they're scared?",
-    "你有没有喜欢不停抖腿的习惯 / Do you have a habit of constantly bouncing your leg?",
+    "你是不是很爱抖腿 / Do you have a habit of constantly bouncing your leg?",
     "兔子视野很广对吗？几乎是360度 / Rabbits have really wide vision, right? Almost 360 degrees",
     "你喜欢吃什么？胡萝卜是刻板印象还是真的爱吃 / What do you like to eat? Is the carrot thing a stereotype or real?",
     "兔子都这么可爱，你本人一定更可爱 / Rabbits are all so cute, you must be even cuter in person",
     "听说兔子一紧张就会不停动鼻子，你也这样吗 / I heard rabbits twitch their noses nonstop when nervous, do you too?",
     "兔子的毛一定超级软，好想摸 / Rabbit fur must be super soft, I want to pet it",
-    "你平时活动时间是白天还是晨昏的？ / Are you active during the day, or at dawn and dusk?",
+    "你平时是白天活动，还是早晚活动？ / Are you active during the day, or at dawn and dusk?",
   ],
   鹿: [
     "鹿！感觉特别温柔的种族 / A deer! Such a gentle species",
@@ -6907,7 +6925,7 @@ const _BREED_MSG_POOLS = {
     "鹿在感情里是很纯情的那种吗？ / Are deer the pure, innocent type in love?",
     "你的角每年都会换吗，好神奇 / Do your antlers grow back every year? So amazing",
     "我觉得鹿特别有灵气，遇到你感觉很幸运 / Deer have such an ethereal vibe, I feel lucky to meet you",
-    "鹿害怕的时候是什么反应，冻住还是逃跑 / What do deer do when scared, freeze or run?",
+    "鹿害怕的时候是什么反应，僵住还是逃跑 / What do deer do when scared, freeze or run?",
     "你对自己喜欢的人会主动吗，还是等对方追？ / Do you make the first move with someone you like, or wait to be chased?",
   ],
   鸟: [
@@ -6933,7 +6951,7 @@ const _BREED_MSG_POOLS = {
   ],
   蛇: [
     "蛇！感觉神秘又酷，我一直很好奇蛇 / A snake! Mysterious and cool, I've always been curious about snakes",
-    "你是冷血的吗，冬天会变得不活泼吗 / Are you cold-blooded? Do you get sluggish in winter?",
+    "你是冷血的吗，冬天会不会懒得动 / Are you cold-blooded? Do you get sluggish in winter?",
     "蛇的感知能力是靠舌头吗？好神奇 / Do snakes sense things with their tongues? So amazing",
     "你有毒吗？如果有的话……算了 / Are you venomous? If you are... never mind",
     "蛇蜕皮的时候是什么感觉 / What does shedding your skin feel like?",
@@ -6952,7 +6970,7 @@ const _BREED_MSG_POOLS = {
     "你的耳朵是竖耳还是垂耳？两种我都喜欢 / Are your ears upright or floppy? I like both",
     "狗对自己喜欢的人是很黏的那种吗 / Are dogs really clingy with people they like?",
     "你遇到喜欢的人会直接说出来吗，还是会拐弯抹角 / When you like someone, do you say it straight out or beat around the bush?",
-    "狗睡觉会做追梦梦吗，腿会不会抖 / Do dogs dream about chasing things? Do your legs twitch?",
+    "狗睡觉的时候会梦见追东西吗，腿会不会一抽一抽的 / Do dogs dream about chasing things? Do your legs twitch?",
     "我觉得狗特别真诚，所以第一眼就想打招呼 / Dogs are so sincere, that's why I wanted to say hi right away",
   ],
   马: [
@@ -6963,19 +6981,19 @@ const _BREED_MSG_POOLS = {
     "听说马很通人性，你对人的情绪感知能力强吗 / I heard horses really understand people, are you good at reading emotions?",
     "马在感情里是奔放型的还是保守型的 / Are horses free-spirited or reserved in love?",
     "你喜欢大草原还是城市生活 / Do you prefer open grasslands or city life?",
-    "马力量很大，保护起喜欢的人来一定很有力 / Horses are so strong, you must be great at protecting the one you like",
+    "马力量很大，被你保护一定很有安全感 / Horses are so strong, I'd feel so safe with you",
     "我觉得马特别有活力，和你在一起一定不会无聊 / Horses are so full of energy, being with you would never be boring",
     "你跑步的时候是四足还是双足？ / Do you run on four legs or two?",
   ],
   猪: [
     "猪！听说猪其实超级聪明的，是真的吗 / A pig! I heard pigs are actually super smart, is that true?",
-    "你平时喜欢在泥地打滚吗，还是这个是刻板印象 / Do you like rolling in the mud, or is that a stereotype?",
+    "你平时喜欢在泥地打滚吗，还是这只是刻板印象 / Do you like rolling in the mud, or is that a stereotype?",
     "猪对食物真的很有热情吗，你有什么特别喜欢的 / Are pigs really that passionate about food? Any favorites?",
     "听说猪嗅觉比狗还灵，是真的吗 / I heard pigs have a better nose than dogs, is that true?",
     "猪感觉很享受生活，你是这种类型吗 / Pigs seem to really enjoy life, are you that type?",
-    "我觉得猪特别真实可爱，想和你认识 / Pigs are so genuine and cute, I'd love to get to know you",
+    "我觉得猪特别真实可爱，想认识你 / Pigs are so genuine and cute, I'd love to get to know you",
     "你有小蹄子吗，听说猪的蹄很有意思 / Do you have little hooves? I heard pig hooves are interesting",
-    "猪智商真的很高，在学业或者工作上很厉害吗 / Pigs are really smart, are you great at school or work?",
+    "猪智商真的很高，你读书工作一定都很厉害吧 / Pigs are really smart, you must be great at school and work",
   ],
   浣熊: [
     "浣熊！超可爱的种族，你有没有洗东西的习惯 / A raccoon! Such a cute species, do you have a habit of washing things?",
@@ -6985,7 +7003,7 @@ const _BREED_MSG_POOLS = {
     "你平时是昼行性还是夜行性的 / Are you diurnal or nocturnal?",
     "浣熊的爪子很灵巧对吗，手工能力一定很强 / Raccoon paws are really nimble, right? You must be great at crafts",
     "我觉得浣熊特别有个性，看到你就想认识 / Raccoons have so much personality, I wanted to meet you right away",
-    "你背上的条纹尾巴是真的还是造型 / Is your ringed tail real or styled?",
+    "你的环纹尾巴是真的还是造型 / Is your ringed tail real or styled?",
   ],
   水獭: [
     "水獭！最可爱的种族之一，我直接就打招呼了 / An otter! One of the cutest species, I said hi immediately",
@@ -6993,13 +7011,13 @@ const _BREED_MSG_POOLS = {
     "水獭的毛摸起来是什么感觉，防水的吗 / What does otter fur feel like? Is it waterproof?",
     "你平时喜欢待在水边吗 / Do you like hanging out by the water?",
     "听说水獭喜欢把喜欢的东西放在肚子上，你有这个习惯吗 / I heard otters keep their favorite things on their bellies, do you?",
-    "水獭手牵手睡觉是真的吗，好想 / Is it true otters hold hands while sleeping? I want that",
+    "水獭手牵手睡觉是真的吗，好想试试 / Is it true otters hold hands while sleeping? I want that",
     "你喜欢吃鱼吗？水獭应该都很爱吧 / Do you like fish? All otters must love it",
     "我觉得水獭是最治愈的种族，想认识你 / Otters are the most healing species, I'd love to get to know you",
   ],
   狸: [
     "狸！感觉好神秘，你是什么狸 / A tanuki! So mysterious, what kind are you?",
-    "狸有没有变化的能力，传说里狸猫很厉害 / Can tanuki shapeshift? They're so powerful in legends",
+    "狸真的会变身吗，传说里狸猫很厉害 / Can tanuki shapeshift? They're so powerful in legends",
     "你的肚皮是圆圆的吗，好想摸 / Is your belly round? I want to pat it",
     "狸是夜行性的吗，你喜欢晚上活动吗 / Are tanuki nocturnal? Do you like going out at night?",
     "听说狸特别擅长伪装，你平时给人什么印象 / I heard tanuki are masters of disguise, what impression do you give people?",
@@ -7038,7 +7056,7 @@ const _BREED_MSG_POOLS = {
     "你的胡须很灵敏吗，能感知周围环境 / Are your whiskers really sensitive? Can you sense your surroundings?",
     "鼠记忆力和解决问题的能力都很强对吗 / Rats have great memory and problem-solving skills, right?",
     "你平时是夜行性的吗，白天睡觉 / Are you nocturnal? Sleep during the day?",
-    "鼠感觉特别适应力强，哪里都能生活 / Rats are so adaptable, you can live anywhere",
+    "鼠的适应力感觉特别强，哪里都能生活 / Rats are so adaptable, you can live anywhere",
     "和鼠相处感觉会很有趣，想认识你 / Hanging out with a rat would be so fun, I'd love to meet you",
   ],
   豚鼠: [
@@ -7047,7 +7065,7 @@ const _BREED_MSG_POOLS = {
     "豚鼠喜欢发出什么声音，那种咕噜声吗 / What sounds do guinea pigs make? That purring kind?",
     "你的毛是什么颜色的，好想看看 / What color is your fur? I'd love to see",
     "豚鼠感觉特别亲人，很好接触吗 / Guinea pigs seem so friendly, are you easy to approach?",
-    "见到豚鼠感觉很开心，今天打招呼了 / Seeing a guinea pig made me so happy, so I said hi today",
+    "见到豚鼠好开心，忍不住来打个招呼 / Seeing a guinea pig made me so happy, couldn't help saying hi",
   ],
   海豚: [
     "海豚！感觉最聪明的海洋种族 / A dolphin! The smartest ocean species",
@@ -7078,7 +7096,7 @@ const _BREED_MSG_POOLS = {
     "考拉的鼻子是扁扁大大的吗，好特别 / Is a koala's nose big and flat? So unique",
     "你平时睡多久，一天能睡二十多小时吗 / How long do you sleep? Can you sleep 20-plus hours a day?",
     "考拉感觉特别慢节奏，你喜欢安静的生活吗 / Koalas seem so slow-paced, do you like a quiet life?",
-    "见到考拉感觉很幸运，今天打招呼了 / I feel lucky to meet a koala, so I said hi today",
+    "见到考拉好幸运，忍不住来打个招呼 / So lucky to meet a koala, couldn't help saying hi",
   ],
   蝙蝠: [
     "蝙蝠！唯一会飞的哺乳类，很特别 / A bat! The only flying mammal, so special",
@@ -7101,12 +7119,12 @@ const _BREED_MSG_POOLS = {
     "你真的会喷液体吗，哪种情况下才会用 / Do you really spray? In what situations?",
     "臭鼬的花纹是黑白条纹吗，好特别 / Are skunk stripes black and white? So unique",
     "听说臭鼬其实很温和，是真的吗 / I heard skunks are actually really gentle, is that true?",
-    "你平时害怕什么，感觉没有天敌的感觉 / What are you afraid of? It feels like you have no natural enemies",
+    "你平时会害怕什么吗，感觉你都没什么天敌 / Is there anything you're afraid of? You don't seem to have any natural enemies",
     "臭鼬感觉很有自信，我喜欢这种感觉 / Skunks seem so confident, I like that",
   ],
   树懒: [
     "树懒！感觉最放松的种族，很羡慕你们 / A sloth! The most relaxed species, I envy you",
-    "你真的动作很慢吗，不着急不焦虑的感觉 / Do you really move that slowly? No rush, no anxiety?",
+    "你做事真的很慢吗，那种不急不躁的感觉真好 / Do you really move that slowly? I love that unhurried vibe",
     "树懒挂在树上睡觉吗，不会掉下来吗 / Do sloths sleep hanging from trees? Don't you fall?",
     "你一天睡多久，感觉很享受生活 / How long do you sleep a day? You seem to really enjoy life",
     "树懒感觉特别治愈，想和你在一起放松一下 / Sloths are so healing, I'd love to just relax with you",
@@ -7121,7 +7139,7 @@ const _BREED_MSG_POOLS = {
     "感觉雪貂特别有趣，想认识你 / Ferrets seem so fun, I'd love to get to know you",
   ],
   蜜獾: [
-    "蜜獾！听说无所畏惧的种族，是真的吗 / A honey badger! I heard you're the fearless species, is it true?",
+    "蜜獾！听说是天不怕地不怕的种族，真的吗 / A honey badger! I heard you're the fearless species, is it true?",
     "你真的什么都不怕吗，就算对上更大的动物 / Are you really not afraid of anything, even bigger animals?",
     "蜜獾皮很厚对吗，一般攻击伤不到你们 / Honey badger skin is super thick, right? Most attacks can't hurt you",
     "你喜欢吃蜂蜜吗，为什么叫蜜獾 / Do you like honey? Is that why you're called a honey badger?",
@@ -7131,7 +7149,7 @@ const _BREED_MSG_POOLS = {
   海獭: [
     "海獭！最可爱的海洋种族，我直接就打招呼了 / A sea otter! The cutest ocean species, I said hi immediately",
     "你会把食物放在肚子上吃吗，想看看这个 / Do you eat food off your belly? I'd love to see that",
-    "海獭手牵手睡觉是真的吗，好想 / Is it true sea otters hold hands while sleeping? I want that",
+    "海獭手牵手睡觉是真的吗，好想试试 / Is it true sea otters hold hands while sleeping? I want that",
     "你的毛防水吗，能浮在水面上吗 / Is your fur waterproof? Can you float on the surface?",
     "海獭喜欢吃贝类吗，用石头砸开的那种 / Do sea otters like shellfish? The kind you crack open with a rock?",
     "我觉得海獭是最治愈的种族之一，想认识你 / Sea otters are one of the most healing species, I'd love to meet you",
@@ -7157,8 +7175,8 @@ const _BREED_MSG_POOLS = {
     "你的角是真的角质的吗，很硬吧 / Is your horn really made of keratin? Must be hard",
     "犀牛皮肤很厚实对吗，不怕一般伤害 / Rhino skin is really thick, right? Not afraid of normal injuries?",
     "你视力不好但嗅觉很灵吗，听说是这样 / Bad eyesight but a great nose, right? That's what I heard",
-    "犀牛感觉外表强硬但内心很温和吗 / Do rhinos look tough on the outside but gentle inside?",
-    "今天鼓起勇气打招呼，感觉犀牛很特别 / Worked up the courage to say hi today, rhinos seem so special",
+    "犀牛是不是外表强硬，内心其实很温和 / Do rhinos look tough on the outside but gentle inside?",
+    "感觉犀牛很特别，今天鼓起勇气来打个招呼 / Worked up the courage to say hi today, rhinos seem so special",
   ],
   河马: [
     "河马！水里最危险的种族之一，感觉很厉害 / A hippo! One of the most dangerous species in the water, impressive",
@@ -7166,15 +7184,15 @@ const _BREED_MSG_POOLS = {
     "河马皮肤会分泌红色液体吗，那个是防晒的吗 / Does hippo skin ooze red liquid? Is that sunscreen?",
     "你的嘴巴张开很大吗，感觉力量很强 / Can you open your mouth really wide? Seems so powerful",
     "河马感觉外表憨厚，实际上非常有力量 / Hippos look goofy but are actually incredibly strong",
-    "遇到河马很难得，打招呼看看 / Meeting a hippo is rare, figured I'd say hi",
+    "难得遇到河马，来打个招呼 / Meeting a hippo is rare, figured I'd say hi",
   ],
   骆驼: [
     "骆驼！感觉最耐旱的种族，很厉害 / A camel! The most drought-proof species, amazing",
-    "你的驼峰里装的是脂肪不是水对吗，真的 / Your humps store fat, not water, right? Really?",
+    "你的驼峰里装的是脂肪不是水，对吧 / Your humps store fat, not water, right?",
     "骆驼踩沙漠很稳，蹄子很宽大吗 / Camels walk so steadily on sand, are your hooves really wide?",
     "你脾气怎么样，骆驼感觉很有个性 / How's your temper? Camels seem to have a lot of attitude",
     "骆驼眼睫毛很长对吗，好特别 / Camels have really long eyelashes, right? So unique",
-    "感觉骆驼特别耐力强，你在生活里也是坚韧型的吗 / Camels have so much stamina, are you the resilient type in life too?",
+    "感觉骆驼特别有耐力，你在生活里也是坚韧型的吗 / Camels have so much stamina, are you the resilient type in life too?",
   ],
   斑马: [
     "斑马！条纹是每只都不一样的吗，好特别 / A zebra! Is every zebra's stripe pattern different? So unique",
@@ -7189,12 +7207,12 @@ const _BREED_MSG_POOLS = {
     "你的毛会定期剃掉吗，那个过程是什么感觉 / Do you get sheared regularly? What's that like?",
     "绵羊感觉特别温和，你平时脾气很好吗 / Sheep seem so gentle, are you usually good-tempered?",
     "你有犄角吗，绵羊有的有有的没有 / Do you have horns? Some sheep do, some don't",
-    "感觉绵羊很舒适，在一起一定很放松 / Sheep seem so cozy, being together must be so relaxing",
-    "你是那种喜欢跟着群体还是喜欢独处的 / Do you like following the flock, or being on your own?",
+    "绵羊感觉软软的，在一起一定很放松 / Sheep seem so cozy, being together must be so relaxing",
+    "你是喜欢跟着大家，还是喜欢独处 / Do you like following the flock, or being on your own?",
   ],
   山羊: [
     "山羊！爬山高手，什么样的斜坡都能爬吗 / A goat! Master climber, can you handle any slope?",
-    "你的胡子是白的吗，感觉山羊有胡子 / Is your beard white? Goats seem to have beards",
+    "你有胡子吗，是白色的吗 / Do you have a beard? Is it white?",
     "山羊眼睛是方形瞳孔对吗，好神奇 / Goats have rectangular pupils, right? So amazing",
     "你真的什么都能吃吗，山羊很不挑食 / Can you really eat anything? Goats aren't picky at all",
     "你有犄角吗，山羊的角感觉很有气势 / Do you have horns? Goat horns look so impressive",
@@ -7243,14 +7261,14 @@ const _BREED_MSG_POOLS = {
   鹤: [
     "鹤！感觉特别优雅的鸟类，飞起来一定很美 / A crane! Such an elegant bird, you must look beautiful in flight",
     "鹤是一夫一妻制的吗，在感情里很专一 / Are cranes monogamous? So devoted in love",
-    "你的舞蹈是真实存在的吗，鹤求偶舞 / Is the crane dance real? The courtship dance?",
+    "鹤真的会跳求偶舞吗，好想看 / Do cranes really do a courtship dance? I'd love to see it",
     "你能站在一条腿上休息吗，平衡感超好 / Can you rest standing on one leg? Amazing balance",
     "鹤感觉很有气质，看到你档案就被吸引了 / Cranes have such grace, your profile drew me right in",
     "你的寿命很长吗，感觉鹤很有阅历 / Do you live really long? Cranes seem so worldly",
   ],
   鳄: [
     "鳄鱼！感觉最古老的种族之一，真的很厉害 / A crocodile! One of the oldest species, truly impressive",
-    "你在水里的速度很快吗，还是说主要靠静止等待 / Are you fast in the water, or do you mostly wait motionless?",
+    "你在水里游得很快吗，还是主要靠一动不动地等 / Are you fast in the water, or do you mostly wait motionless?",
     "鳄鱼的咬合力是所有种族里最强的之一吗 / Is a crocodile's bite one of the strongest of any species?",
     "你的皮肤摸起来是粗糙的鳞片感吗 / Does your skin feel like rough scales?",
     "鳄鱼感觉特别沉稳，不轻易行动 / Crocodiles seem so composed, never moving rashly",
@@ -7260,7 +7278,7 @@ const _BREED_MSG_POOLS = {
     "蜥蜴！感觉特别有个性的爬行种族 / A lizard! Such a quirky reptile",
     "你的尾巴断了可以再生吗，这个真的很神奇 / Can your tail grow back if it breaks? That's so amazing",
     "蜥蜴变色能力怎么样，会根据环境改变颜色吗 / How good are lizards at changing color? Do you change with your surroundings?",
-    "你是冷血动物吗，早上需要先晒太阳活动 / Are you cold-blooded? Do you need to sunbathe before getting going in the morning?",
+    "你是冷血动物吗，早上要先晒晒太阳才动得起来 / Are you cold-blooded? Do you need to sunbathe before getting going in the morning?",
     "蜥蜴感觉很灵活，反应速度很快 / Lizards seem so agile, super quick reactions",
     "你平时喜欢在哪里待着，高处还是地面 / Where do you like to hang out, up high or on the ground?",
   ],
@@ -7282,7 +7300,7 @@ const _BREED_MSG_POOLS = {
   ],
   青蛙: [
     "青蛙！感觉最会跳的两栖种族 / A frog! The best jumper among amphibians",
-    "你能跳多高，身体比例来说很惊人吧 / How high can you jump? It must be amazing for your size",
+    "你能跳多高，按身体比例算一定很惊人吧 / How high can you jump? It must be amazing for your size",
     "青蛙的皮肤是湿润的吗，需要保持湿度 / Is frog skin moist? Do you need to stay damp?",
     "你会发出什么叫声，夏天那种蛙鸣吗 / What sound do you make? That summer croaking?",
     "青蛙感觉特别有活力，你也是这样吗 / Frogs seem so full of energy, are you like that too?",
@@ -7294,7 +7312,7 @@ const _BREED_MSG_POOLS = {
     "钝口螈的话，你是那种永远幼态的吗，好可爱 / If you're an axolotl, do you stay baby-faced forever? So cute",
     "蝾螈感觉很安静，不怎么叫对吗 / Salamanders seem so quiet, you don't make many sounds, right?",
     "你是水里生活还是陆地，两栖的话两边都行 / Do you live in water or on land? As an amphibian, either works",
-    "感觉蝾螈很特别，今天打招呼了 / Salamanders seem so special, so I said hi today",
+    "感觉蝾螈很特别，忍不住来打个招呼 / Salamanders seem so special, couldn't help saying hi",
   ],
   蜘蛛: [
     "蜘蛛！八只眼睛，视野是360度的吗 / A spider! Eight eyes, is your vision 360 degrees?",
@@ -7302,7 +7320,7 @@ const _BREED_MSG_POOLS = {
     "蜘蛛的丝很强韧对吗，比钢铁还坚固 / Spider silk is super strong, right? Stronger than steel",
     "你有毒吗，大部分蜘蛛都有一点点 / Are you venomous? Most spiders are a little",
     "蜘蛛感觉特别有耐心，等待猎物那种沉稳 / Spiders seem so patient, that calm way of waiting for prey",
-    "遇到蜘蛛感觉很特别，今天打招呼了 / Meeting a spider feels so special, so I said hi today",
+    "遇到蜘蛛感觉很特别，忍不住来打个招呼 / Meeting a spider feels so special, couldn't help saying hi",
   ],
   蝎子: [
     "蝎子！感觉很有气势的节肢种族 / A scorpion! Such an imposing arthropod",
@@ -7343,15 +7361,15 @@ const _SINGLE_QUESTION_POOL = [
   "你有在国外的伴侣吗？/ Do you have a partner abroad?",
   "你有在其他国家的伴侣吗？/ Do you have a partner in other countries?",
   "你有网恋对象吗？/ Do you have an online partner?",
-  '你有在暧昧关系中吗？/ Are you "in a situationship" single?',
+  '你现在有暧昧对象吗？/ Are you "in a situationship" single?',
   '你还爱着前任吗？/ Are you "still in love with your ex" single?',
   '你是开放关系吗？/ Are you "in an open relationship" single?',
-  '你找fwb/ons吗？/ Are you "in a friends with benefits" single?',
+  '你找fwb/ons吗？/ Are you "looking for FWB or a hookup" single?',
   '你有在暗恋谁吗？/ Are you "I have a crush on someone" single?',
   "你是因为孤独所以想找伴侣吗？/ Are you \"I want a partner because I'm lonely\" single?",
   "你结过婚吗？/ Have you been married?",
   "你有孩子吗？/ Do you have kids?",
-  '你有「那个错过的人」吗？/ Do you have a "one that got away"?',
+  '你有错过的那个人吗？/ Do you have a "one that got away"?',
 ];
 
 function _startSingleQuestions() {
@@ -7797,6 +7815,7 @@ function openReasonPopup(action) {
     { label: "身高/Height", value: p.height },
     { label: "性取向/Orientation", value: p.orientation },
     { label: "婚恋/Status", value: p.sterilized || rel.status },
+    { label: "绝育/Sterilized", value: p.neutered },
     { label: "其他关系/Other Ships", value: rel.ships && rel.ships !== REL_SHIP_NONE ? rel.ships : "" },
     { label: "MBTI", value: p.mbti },
     { label: "星座/Horoscope", value: p.horoscope },
@@ -8306,7 +8325,7 @@ function _buildThemePicker() {
     <button class="nes-btn theme-swatch${currentTheme.id === t.id ? " selected" : ""}" data-id="${t.id}"
       onclick="setTheme(THEME_PRESETS.find((x) => x.id === this.dataset.id))">
       <span class="theme-swatch-chip" style="background:${t.bg};color:${t.ink}">Aa</span>
-      <span>${t.zh} ${t.en}</span>
+      <span${t.zh === t.en ? " data-noi18n" : ""}>${t.zh === t.en ? t.zh : `${t.zh} ${t.en}`}</span>
     </button>`,
   ).join("");
   _syncCustomInputs();

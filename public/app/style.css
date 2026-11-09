@@ -856,6 +856,13 @@ li.other .words {
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 8px;
 }
+/* 三格一排太窄：标题的中文、英文分上下两行（双语模式），英文才不会被截成「Orien…」 */
+.grid-3 .label .zh,
+.grid-3 .label small.en {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
 
 .grid-2 {
   display: grid;
@@ -1002,16 +1009,17 @@ li.other .words {
   animation: interp-glow 1.6s ease-in-out infinite;
 }
 
+/* 被评论过的栏一闪一闪：亮红 + 红光。原来是墨色 ↔ 暗红，两个都很深，短的字（「雄」「100」）几乎看不出在闪 */
 @keyframes interp-glow {
   0%, 100% {
     color: var(--c-text);
     text-shadow: none;
   }
   50% {
-    color: #b83030;
+    color: var(--c-err);
     text-shadow:
-      0 0 4px rgba(204, 30, 30, 0.30),
-      0 0 8px rgba(204, 30, 30, 0.15);
+      0 0 6px rgba(204, 30, 30, 0.70),
+      0 0 14px rgba(204, 30, 30, 0.45);
   }
 }
 
@@ -2828,4 +2836,12 @@ html[data-lang="en"] .tut-text .en {
 }
 #tut[data-mode="popup"] .tut-text {
   font-size: 13px;
+}
+
+/* 「继续填草稿」弹窗的两个按钮：一行放下「重新开始 Restart」，不换行 */
+#draft-overlay .theme-name-btns .nes-btn {
+  white-space: nowrap;
+  letter-spacing: 0;
+  padding-left: 4px !important;
+  padding-right: 4px !important;
 }

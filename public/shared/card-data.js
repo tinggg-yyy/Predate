@@ -42,9 +42,9 @@ const DISP = {
   // house type (base)
   下水管道: "下水管道 / Pipe Shack",
   地下室: "地下室 / Basement",
-  普通住宅: "普通住宅 / Regular",
-  公寓: "公寓 / Apt",
-  大平层: "大平层 / Open Plan",
+  普通住宅: "普通住宅 / Regular Home",
+  公寓: "公寓 / Apartment",
+  大平层: "大平层 / Luxury Flat",
   别墅: "别墅 / Villa",
   // city/region special types
   四合院: "四合院 / Courtyard House ✨",
@@ -71,17 +71,17 @@ const DISP = {
   有房贷: "有房贷 / Mortgaged",
   无房贷: "无房贷 / Paid Off ✨",
   // education
-  小学: "小学 / Primary",
-  初中: "初中 / Middle",
+  小学: "小学 / Primary School",
+  初中: "初中 / Middle School",
   高中: "高中 / High School",
   大专: "大专 / Associate",
   本科: "本科 / Bachelor",
   "硕士+": "硕士+ / Master+",
   // occupation
   无业: "无业 / Unemployed",
-  体力劳动: "体力劳动 / Labor",
-  服务业: "服务业 / Service",
-  办公室职员: "办公室职员 / Office",
+  体力劳动: "体力劳动 / Manual Labor",
+  服务业: "服务业 / Service Industry",
+  办公室职员: "办公室职员 / Office Worker",
   专业人士: "专业人士 / Professional",
   企业高管: "企业高管 / Executive",
   // income (dice)
@@ -138,10 +138,10 @@ const DISP = {
   "35层": "共35层 / 35 Floors",
   "50层以上": "共50层+ / 50+ Floors",
   // villa floors
-  "1层独栋": "1层独栋 / 1-Story",
+  "1层独栋": "1层独栋 / 1-Story House",
   "2层别墅": "2层别墅 / 2-Story Villa",
   "3层别墅": "3层别墅 / 3-Story Villa",
-  "4层及以上": "4层及以上 / 4F+",
+  "4层及以上": "4层及以上 / 4+ Story Villa",
   // house price (cheap tier)
   "5w": "5w / ¥50k",
   "10w": "10w / ¥100k",
@@ -196,15 +196,18 @@ const DISP = {
   "大专/Associate": "大专 / Associate",
   "高中/High School": "高中 / High School",
   "初中/Middle School": "初中 / Middle School",
-  "小学/Primary": "小学 / Primary",
+  "小学/Primary": "小学 / Primary School",
   // marriage/sterilized
   "单身/Single": "单身 / Single",
   "恋爱中/Dating": "恋爱中 / In a Relationship",
   "已婚/Married": "已婚 / Married",
   "已配对/Mated": "已配对 / Mated",
-  "开放关系/Open": "开放关系 / Open",
-  "开放关系/Open Relationship": "开放关系 / Open Rel.",
+  "开放关系/Open": "开放关系 / Open Relationship",
+  "开放关系/Open Relationship": "开放关系 / Open Relationship",
   "离异/Divorced": "离异 / Divorced",
+  // 绝育
+  "未绝育/Not Sterilized": "未绝育 / Not Sterilized",
+  "已绝育/Sterilized": "已绝育 / Sterilized",
   // orientation
   "异性恋/Straight": "异性恋 / Straight",
   "同性恋/Gay·Lesbian": "同性恋 / Gay & Lesbian",
@@ -238,7 +241,12 @@ function _cnMoneyEn(t) {
 
 function disp(v) {
   if (DISP[v]) return DISP[v];
-  if (typeof v !== "string" || v.includes("/")) return v;
+  if (typeof v !== "string") return v;
+  if (v.includes("/")) {
+    // 不在翻译表里的「中文/English」：斜杠两边补上空格，和表里的写法一样（只有一个斜杠时才补）
+    const m = v.match(/^([^/]*[\u4e00-\u9fff][^/]*?)\s*\/\s*([^/\u4e00-\u9fff]+)$/);
+    return m ? `${m[1]} / ${m[2]}` : v;
+  }
   // 租金：「月租1w元」→「月租1w元 / Rent ¥10k Monthly」
   const rent = v.match(/^月租(.+)$/);
   if (rent && _cnMoneyEn(rent[1])) return `${v} / Rent ${_cnMoneyEn(rent[1])} Monthly`;
@@ -395,7 +403,7 @@ const HOBBY_CATEGORIES = [
       { zh: "攀爬", en: "Climbing" },
       { zh: "格斗", en: "Fighting" },
       { zh: "潜水", en: "Diving" },
-      { zh: "晒毛", en: "Sunbathing Fur" },
+      { zh: "晒毛", en: "Fur Sunbathing" },
       { zh: "理毛", en: "Grooming" },
       { zh: "嗅探", en: "Sniffing" },
       { zh: "夜行", en: "Night Roaming" },
@@ -597,7 +605,7 @@ const HOBBY_CATEGORIES = [
       { zh: "自由潜水", en: "Freediving" },
       { zh: "水肺潜水", en: "Scuba Diving" },
       { zh: "浮潜", en: "Snorkeling" },
-      { zh: "跳水", en: "Diving Boards" },
+      { zh: "跳水", en: "Springboard Diving" },
       { zh: "花样游泳", en: "Synchronized Swimming" },
       { zh: "钓鱼", en: "Fishing" },
       { zh: "飞盘", en: "Frisbee" },
@@ -873,7 +881,7 @@ const HOBBY_CATEGORIES = [
       { zh: "园艺", en: "Gardening" },
       { zh: "种花", en: "Flower Growing" },
       { zh: "种菜", en: "Vegetable Growing" },
-      { zh: "盆栽", en: "Bonsai Potting" },
+      { zh: "盆栽", en: "Potted Plants" },
       { zh: "盆景", en: "Bonsai" },
       { zh: "家居布置", en: "Home Decoration" },
       { zh: "室内设计", en: "Interior Design" },
@@ -1226,6 +1234,8 @@ function cardValues(profile, { perRow = 3 } = {}) {
     height: p.height || "—",
     orientation: disp(p.orientation) || "—",
     status: disp(p.sterilized || rel.status) || "—",
+    // 老档案没有这一项：档案卡上就不显示这一格
+    neutered: p.neutered ? disp(p.neutered) : "",
     ships: ships.length ? rowsOf(ships.join(" · ")) : "",
     mbti: p.mbti || "—",
     horoscope: p.horoscope || getHoroscope(p.birth) || "—",

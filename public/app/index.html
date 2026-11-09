@@ -46,7 +46,7 @@
       <div class="custom-alert-box">
         <p id="draft-msg"></p>
         <div class="theme-name-btns">
-          <button class="nes-btn" onclick="discardDraft()">重新开始 Start over</button>
+          <button class="nes-btn" onclick="discardDraft()">重新开始 Restart</button>
           <button class="nes-btn is-primary" onclick="resumeDraft()">继续 Continue</button>
         </div>
       </div>
@@ -310,6 +310,15 @@
         </div>
         <input id="orientation-custom" class="nes-input hidden" type="text" placeholder="自定义性取向（不能有标点）/ Custom orientation (no punctuation)" />
 
+        <!-- 绝育：摇骰子（未绝育 / 已绝育 / 不透露），和择偶标准里的「已绝育」联动（见 buildWarnings） -->
+        <label>是否绝育 Sterilized?</label>
+        <div class="dice-field-row">
+          <button class="dice-roll-btn" id="petNeutered-dice-btn" data-rolls="0"
+            onclick="rollGenericTierDice('petNeutered-dice-btn','petNeutered-display','petNeutered',HOUSING_TIERS.neutered)"></button>
+          <div id="petNeutered-display" class="dice-result-input">—</div>
+          <input id="petNeutered" type="hidden" value="" />
+        </div>
+
       </div>
       <button class="nes-btn setup-next-btn" onclick="validateAndGoTo('profile-gender','profile-housing')">▶</button>
     </section>
@@ -335,7 +344,7 @@
 
         <!-- 选好上一项才出现（见 _updateHouseSteps） -->
         <div id="house-step-type" class="house-step hidden">
-          <label>房屋类型 Type</label>
+          <label>房屋类型 House Type</label>
           <div class="dice-field-row">
             <button class="dice-roll-btn" id="house-type-dice-btn" data-rolls="0"
               onclick="rollHousingFieldDice('type','house')"></button>
@@ -464,7 +473,7 @@
 
         <!-- 车辆页一项项出现（见 _updateVehicleSteps） -->
         <div id="vehicle-step-count" class="hidden">
-          <label>车辆数量 Count</label>
+          <label>车辆数量 Vehicle Count</label>
           <div class="dice-field-row">
             <button class="dice-roll-btn" id="vehicle-count-dice-btn" data-rolls="0"
               onclick="rollVehicleFieldDice('count')"></button>
@@ -474,7 +483,7 @@
         </div>
 
         <div id="vehicle-price-wrapper" class="hidden">
-          <label>车辆价值 Value</label>
+          <label>车辆价值 Vehicle Value</label>
           <div class="dice-field-row">
             <button class="dice-roll-btn" id="vehicle-price-dice-btn" data-rolls="0"
               onclick="rollVehicleFieldDice('price')"></button>
@@ -516,7 +525,7 @@
 
         <!-- 谈过恋爱才问前任 -->
         <div id="rel-step-exContact" class="hidden">
-          <label>和前任还有联系吗 Still in Touch w/ Ex?</label>
+          <label>和前任还有联系吗 Still in Touch with Ex?</label>
           <div class="dice-field-row">
             <button class="dice-roll-btn" id="rel-exContact-dice-btn" data-rolls="0"
               onclick="rollGenericTierDice('rel-exContact-dice-btn','rel-exContact-display','rel-exContact',HOUSING_TIERS.exContact)"></button>
@@ -590,7 +599,7 @@
         <label>来 App 的原因 Why You're Here</label>
         <div class="dice-field-row">
           <button class="dice-roll-btn" id="rel-purpose-dice-btn" data-rolls="0"
-            onclick="rollGenericTierDice('rel-purpose-dice-btn','rel-purpose-display','rel-purpose',HOUSING_TIERS.datingPurpose)"></button>
+            onclick="rollPurposeDice()"></button>
           <div id="rel-purpose-display" class="dice-result-input">—</div>
           <input id="rel-purpose" type="hidden" value="" />
         </div>
@@ -1079,7 +1088,7 @@
     <div id="swipe-impression-popup" class="hidden">
       <div class="interpret-box">
         <p>留下你的印象 Your Impression</p>
-        <p style="font-size:11px; opacity:0.6; margin: -4px 0 6px;" class="bi-stack"><span class="zh">你的看法会刻入它的形象</span><span class="en">your words will become part of them</span></p>
+        <p style="font-size:11px; opacity:0.6; margin: -4px 0 6px;" class="bi-stack"><span class="zh">你的看法会刻入它的形象</span><span class="en">Your words will become part of them</span></p>
         <input
           id="swipe-impression-input"
           class="nes-input"
@@ -1175,6 +1184,8 @@
 
     <script src="geo-data.js"></script>
     <script src="../shared/card-data.js"></script>
+    <!-- 开场白和加减分：服务器也读同一个文件 -->
+    <script src="../shared/openers.js"></script>
     <script src="sketch.js"></script>
     <script src="script.js"></script>
   </body>

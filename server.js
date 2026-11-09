@@ -177,7 +177,7 @@ function stripTags(value) {
 
 // 发给客户端的档案一律去掉密码，密码只留在服务器上
 function publicProfile(p) {
-  const { password, likers, skippers, ...rest } = p;
+  const { password, likers, skippers, openerBonusTo, ...rest } = p;
   return rest;
 }
 
@@ -267,6 +267,8 @@ function selfPayload(p, token) {
 }
 // 分数是手机端算的，不封顶也不封底（正常填表最高 361、最低 −205）；
 // 只挡掉 ±1000 以外的数，那只可能是绕过页面伪造的请求
+// 开场白和加减分（和 app 用同一个文件）
+const { OPENER_SCORES, openerType } = require("./public/shared/openers.js");
 const clampScore = (n) => Math.max(-1000, Math.min(1000, Math.round(Number(n) || 0)));
 
 // POST /login — 由服务器比对账号密码，只回答对不对，不把别人的密码发出去
@@ -345,7 +347,7 @@ app.post("/profiles", function (req, res) {
   if (!profile.username || !profile.password) return res.status(400).json({ error: "Missing username or password" });
   profile.score = clampScore(profile.score);
   // 喜欢 / 跳过 / 解读这些只能由别人产生，注册时带过来的一律不要
-  ["likes", "skips", "likers", "skippers", "interpretations", "impressions", "isAdmin", "token"].forEach((k) => delete profile[k]);
+  ["likes", "skips", "likers", "skippers", "interpretations", "impressions", "isAdmin", "token", "openerBonusTo"].forEach((k) => delete profile[k]);
 
   // 以文件为准，避免内存里的旧数据覆盖
   try { profiles = JSON.parse(fs.readFileSync("profiles.json", "utf8")); } catch (_) {}
@@ -356,7 +358,8 @@ app.post("/profiles", function (req, res) {
     if (!checkPassword(existing.password, profile.password)) {
       return res.status(409).json({ error: "Username already taken" });
     }
-    const locked = ["id", "date", "password"];
+    // 分数在第一次生成档案时就定了，之后只会被开场白、被跳过改变；重新提交不能改（否则谁都能把自己刷到第一）
+    const locked = ["id", "date", "password", "score"];
     Object.keys(profile).forEach((key) => {
       if (!locked.includes(key)) existing[key] = profile[key];
     });
@@ -546,7 +549,7 @@ app.put("/profiles/:username", function (req, res) {
   if (!profile) return res.status(404).json({ error: "Not found" });
 
   // 本人不能改别人给的喜欢 / 跳过 / 解读，也不能改分数；管理员可以
-  const locked = ["username", "password", "id", "date", "likers", "skippers"];
+  const locked = ["username", "password", "id", "date", "likers", "skippers", "openerBonusTo"];
   if (!isAdmin(me)) locked.push("likes", "skips", "interpretations", "impressions", "score");
   Object.keys(updates).forEach((key) => {
     if (!locked.includes(key)) profile[key] = updates[key];
@@ -571,6 +574,8 @@ app.post("/interpretation", function (req, res) {
   const addedBy = profiles.find((p) => p.username === me)?.name || me;
   if (!text || typeof field !== "string" || !/^[\w-]+$/.test(field)) return res.status(400).json({ error: "Bad input" });
 
+  // 不能给自己的档案写解读
+  if (profileUsername === me) return res.status(403).json({ error: "Can't interpret your own profile" });
   let profile = profiles.find((p) => p.username === profileUsername);
   if (!profile) return res.status(404).json({ error: "Not found" });
 
@@ -610,6 +615,8 @@ app.post("/interpretation/agree", function (req, res) {
   if (!agreeingUser) return;
   try { profiles = JSON.parse(fs.readFileSync("profiles.json", "utf8")); } catch (_) {}
   const { profileUsername, field, interpIndex } = req.body;
+  // 别人写在自己档案上的解读，自己不能点赞
+  if (profileUsername === agreeingUser) return res.status(403).json({ error: "Can't agree on your own profile" });
   const profile = profiles.find((p) => p.username === profileUsername);
   if (!profile) return res.status(404).json({ error: "Not found" });
   const arr = profile.interpretations?.[field];
@@ -652,7 +659,30 @@ app.post("/messages", function (req, res) {
 
   messages.push(msg);
   fs.writeFileSync("messages.json", JSON.stringify(messages, null, 2));
-  res.json(msg);
+
+  // 点喜欢时发的开场白：按 shared/openers.js 的分类给发送的人加减分，存进档案（排行榜跟着变）。
+  // 扣分每发一次都算；加分对同一个人只算一次（openerBonusTo 记着加过分的人），防止对着同一个人刷分
+  let scoreDelta = 0;
+  let sender = null;
+  if (req.body.opener && from === me && to !== me) {
+    const pts = OPENER_SCORES[openerType(content)] || 0;
+    sender = reloadProfiles().find((p) => p.username === me);
+    if (pts && sender) {
+      if (pts < 0) scoreDelta = pts;
+      else {
+        sender.openerBonusTo ||= [];
+        if (!sender.openerBonusTo.includes(to)) {
+          sender.openerBonusTo.push(to);
+          scoreDelta = pts;
+        }
+      }
+      if (scoreDelta) {
+        sender.score = clampScore((sender.score ?? 60) + scoreDelta);
+        fs.writeFileSync("profiles.json", stringifyProfiles(profiles));
+      }
+    }
+  }
+  res.json(scoreDelta ? { ...msg, scoreDelta, score: sender.score } : msg);
 });
 
 // GET /messages/:username — 获取某用户收到的消息
