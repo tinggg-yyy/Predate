@@ -386,7 +386,9 @@ html, body {
   display: flex;
   flex-direction: column;
   align-items: center;
-  justify-content: center;
+  /* 小标题固定贴在左上角；内容在剩下的空间里上下居中（.value 的 margin: auto 0）。
+     原来整体居中：内容只有一行的框（年龄、MBTI…）小标题会往下掉 */
+  justify-content: flex-start;
   min-height: 0;
   overflow: hidden;
   padding: 8px 24px 6px;
@@ -416,6 +418,7 @@ html, body {
 
 /* ── Value — uniform 52px across all cells and sections ── */
 .value {
+  margin: auto 0;
   font-size: 48px;
   color: var(--green);
   text-align: center;

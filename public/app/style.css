@@ -1090,6 +1090,8 @@ li.other .words {
   gap: 12px;
   width: 88vw;
   max-width: 360px;
+  /* 小屏幕放不下时：标签区在框里滚动，标题、输入框、按钮始终看得到 */
+  max-height: calc(100% - 32px);
   box-shadow: 0 0 0 2px rgb(var(--line-rgb) / 0.6), inset 2px 2px 0 rgba(255,255,255,0.12), inset -2px -2px 0 rgb(var(--line-rgb) / 0.2);
 }
 .reason-box p {
@@ -1102,20 +1104,37 @@ li.other .words {
   opacity: 0.6;
   font-size: 10px !important;
 }
+/* 标签按行排（分行见 _layoutReasonLabels）：每行至少两个，拉宽撑满整行 */
 .reason-labels {
   display: flex;
-  flex-wrap: wrap;
+  flex-direction: column;
+  gap: 6px;
+  min-height: 0;
+  overflow-y: auto;
+  /* 按钮按下时会往下挪 2px，留点空间不被裁掉 */
+  padding-bottom: 3px;
+}
+.reason-row {
+  display: flex;
   gap: 6px;
 }
-/* 每一行的标签都拉宽撑满整行（包括最后一行），右边不留空 */
+/* 量宽度时先排成一串、不拉宽 */
+.reason-labels.measuring {
+  flex-direction: row;
+  flex-wrap: wrap;
+}
+.reason-labels.measuring .reason-label-btn {
+  flex: none;
+}
 .reason-label-btn {
   flex: 1 1 auto;
-  padding: 4px 10px;
+  white-space: nowrap;
+  padding: 6px 10px;
   border: var(--btn-border);
   box-shadow: var(--btn-raised);
   color: var(--c-text);
   background: transparent;
-  font-size: 10px;
+  font-size: 12px;
   font-family: "Zpix", monospace;
   cursor: pointer;
   line-height: 1.4;

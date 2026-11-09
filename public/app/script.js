@@ -5856,9 +5856,17 @@ function checkNotifications() {
     });
 }
 
-// 「我」/ 排行榜开着时，骚扰弹窗、提醒、喜欢横幅都先不出来；关掉后消息弹窗和横幅再补上
+// 这些面板 / 弹窗开着时（我、排行榜、消息、档案框、喜欢 / 印象 / 跳过的弹窗、教学），
+// 骚扰弹窗、提醒、喜欢横幅、消息弹窗都先不出来，也不会压在后面；全部关掉后消息弹窗和横幅再补上
+const _QUIET_OVERLAYS = [
+  "me-overlay", "rank-overlay", "messages-panel", "profile-view-overlay", "profile-edit",
+  "like-opener-popup", "warning-overlay", "reason-popup", "swipe-impression-popup", "swipe-sendmsg-popup", "interpret-popup",
+];
 function _quietOverlayOpen() {
-  return _tut.active || ["me-overlay", "rank-overlay"].some((id) => !document.getElementById(id)?.classList.contains("hidden"));
+  return _tut.active || _QUIET_OVERLAYS.some((id) => {
+    const el = document.getElementById(id);
+    return el && !el.classList.contains("hidden");
+  });
 }
 let _pendingLikeBanner = null;
 // 打开「我」/ 排行榜时：正在显示的消息弹窗放回队列最前面，喜欢横幅先收起（它们层级比浮层高）
@@ -5876,7 +5884,24 @@ function _quietOverlayEnter() {
     _pendingLikeBanner = parseInt(banner.querySelector("strong")?.textContent, 10) || 0;
     banner.remove();
   }
+  // 已经弹出来的骚扰提醒（几秒后本来就会自己消失）直接收掉，不留在面板上面或后面
+  document.querySelectorAll(".swipe-interrupt").forEach((el) => el.remove());
 }
+// 上面那些面板一打开就自动收起弹窗，全部关掉就补上（不用在每个打开 / 关闭的地方各写一遍）
+(() => {
+  let wasQuiet = false;
+  const check = () => {
+    const quiet = _quietOverlayOpen();
+    if (quiet && !wasQuiet) _quietOverlayEnter();
+    if (!quiet && wasQuiet) _resumeAfterOverlay();
+    wasQuiet = quiet;
+  };
+  const mo = new MutationObserver(check);
+  [..._QUIET_OVERLAYS, "tut"].forEach((id) => {
+    const el = document.getElementById(id);
+    if (el) mo.observe(el, { attributes: true, attributeFilter: ["class"] });
+  });
+})();
 function _resumeAfterOverlay() {
   if (_quietOverlayOpen()) return;
   if (_pendingLikeBanner !== null) {
@@ -6050,8 +6075,13 @@ function closeMessagePopup() {
   const popup = document.getElementById("msg-popup");
   popup.classList.add("hidden");
   popup.classList.remove("popup-slide-in");
-  // 如果队列里还有消息，500ms 后显示下一条
-  setTimeout(showNextPopup, 500);
+  // 这条已经看过了：点它跳去聊天时打开的消息面板不会再把它放回队列
+  popupShowing = false;
+  currentPopupMsg = null;
+  // 如果队列里还有消息，500ms 后显示下一条（这期间已经弹出新的一条就不重复弹）
+  setTimeout(() => {
+    if (!popupShowing) showNextPopup();
+  }, 500);
 }
 
 function openMessages() {
@@ -7808,6 +7838,77 @@ function openReasonPopup(action) {
 
   document.getElementById("reason-input").value = "";
   document.getElementById("reason-popup").classList.remove("hidden");
+  _layoutReasonLabels();
+}
+
+// 理由标签分行：每行至少两个（不会有一个标签独占一行），各行尽量一样满；每行再拉宽撑满整行（CSS .reason-row）。
+// 先按原来的顺序分；还有落单的，就把落单的标签和别的标签对调再试，从最近的位置找起（顺序尽量不变）。
+// 要等弹窗显示出来才量得到宽度
+function _layoutReasonLabels() {
+  const wrap = document.getElementById("reason-labels");
+  const btns = [...wrap.querySelectorAll(".reason-label-btn")];
+  wrap.classList.add("measuring"); // 先不拉宽，量出每个标签本来的宽度
+  wrap.replaceChildren(...btns);
+  const W = Math.floor(wrap.clientWidth);
+  const width = new Map(btns.map((b) => [b, Math.ceil(b.getBoundingClientRect().width)]));
+  wrap.classList.remove("measuring");
+
+  let order = btns;
+  let plan = _planLabelRows(order.map((b) => width.get(b)), W);
+  for (let tries = 0; plan.singles > 0 && tries < 20; tries++) {
+    let improved = false;
+    for (const row of plan.rows) {
+      if (row.length !== 1 || improved) continue;
+      for (let dist = 1; dist < order.length && !improved; dist++) for (const d of [dist, -dist]) {
+        const i = row[0], k = i + d;
+        if (k < 0 || k >= order.length) continue;
+        const next = [...order];
+        [next[i], next[k]] = [next[k], next[i]];
+        const p = _planLabelRows(next.map((b) => width.get(b)), W);
+        if (p.singles < plan.singles) {
+          order = next;
+          plan = p;
+          improved = true;
+          break;
+        }
+      }
+    }
+    if (!improved) break;
+  }
+
+  wrap.replaceChildren(...plan.rows.map((r) => {
+    const row = document.createElement("div");
+    row.className = "reason-row";
+    row.append(...r.map((i) => order[i]));
+    return row;
+  }));
+}
+
+// 按顺序把宽度 w[] 分成若干行（每行宽 W，间距 6）。比较顺序：单独一行的个数 → 行数 → 每行剩下空白的平方和（越小越均匀）
+function _planLabelRows(w, W, GAP = 6) {
+  const best = [{ singles: 0, rows: 0, slack: 0, from: -1 }];
+  for (let i = 1; i <= w.length; i++) {
+    let rowW = -GAP;
+    for (let j = i - 1; j >= 0; j--) {
+      rowW += w[j] + GAP;
+      // 太宽的标签自己就超过一行时，只能让它单独一行
+      if (rowW > W && j < i - 1) break;
+      const prev = best[j];
+      const cand = {
+        singles: prev.singles + (i - j === 1 ? 1 : 0),
+        rows: prev.rows + 1,
+        slack: prev.slack + Math.max(0, W - rowW) ** 2,
+        from: j,
+      };
+      const cur = best[i];
+      if (!cur || cand.singles < cur.singles || (cand.singles === cur.singles &&
+          (cand.rows < cur.rows || (cand.rows === cur.rows && cand.slack < cur.slack)))) best[i] = cand;
+    }
+  }
+  const rows = [];
+  for (let i = w.length; i > 0; i = best[i].from) rows.unshift(Array.from({ length: i - best[i].from }, (_, k) => best[i].from + k));
+  // 只有一个标签时它必然单独一行，不算
+  return { rows, singles: w.length > 1 ? best[w.length].singles : 0 };
 }
 
 function selectReasonLabel(btn, label) {

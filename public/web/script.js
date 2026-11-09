@@ -192,14 +192,15 @@ function showSpotlight(idx) {
   resetProgress();
 }
 
-// ── 30s 轮播 ──────────────────────────────────────────
+// ── 轮播：每一名展示多久（底下的进度条也跟着这个时长走）──────────
+const CYCLE_MS = 20000;
 
 function startCycle() {
   if (cycleTimer) clearInterval(cycleTimer);
   cycleTimer = setInterval(() => {
     const next = (currentIdx + 1) % ranking.length;
     showSpotlight(next);
-  }, 30000);
+  }, CYCLE_MS);
 }
 
 const calcScore = (p) => (p.score ?? 60) - (p.skips?.length || 0);
@@ -294,6 +295,7 @@ setInterval(() => refreshRanking(), 10000);
 
 function resetProgress() {
   const bar = document.getElementById("progressBar");
+  bar.style.animationDuration = `${CYCLE_MS / 1000}s`;
   bar.classList.remove("running");
   void bar.offsetWidth;
   bar.classList.add("running");
