@@ -239,13 +239,16 @@ async function refreshRanking(thenShowUsername) {
         const addedSkips = newSkips - prev.skips;
         const addedInterps = newInterps - prev.interps;
         for (let i = 0; i < addedLikes; i++) {
-          spawnDanmaku(`有人对 ${fresh.name} 上头了 / Someone fell for "${fresh.name}"`, "like");
+          spawnDanmaku(`有人喜欢上了 ${fresh.name}`, "like");
+          spawnDanmaku(`Someone liked ${fresh.name}`, "like");
         }
         for (let i = 0; i < addedSkips; i++) {
-          spawnDanmaku(`有人划走了 ${fresh.name} / Someone skipped "${fresh.name}"`, "skip");
+          spawnDanmaku(`有人划走了 ${fresh.name}`, "skip");
+          spawnDanmaku(`Someone swiped past ${fresh.name}`, "skip");
         }
         if (addedInterps > 0) {
-          spawnDanmaku(`${fresh.name} 的档案有新评价 / New comment on "${fresh.name}"`, "comment");
+          spawnDanmaku(`有人评价了 ${fresh.name} 的档案`, "comment");
+          spawnDanmaku(`Someone commented on ${fresh.name}'s profile`, "comment");
           // Also update in-memory interps for spotlight re-render
           const inRanking = ranking.find(p => p.username === fresh.username);
           if (inRanking) inRanking.interpretations = fresh.interpretations || {};
@@ -293,6 +296,152 @@ function resetProgress() {
   bar.classList.remove("running");
   void bar.offsetWidth;
   bar.classList.add("running");
+}
+
+// ── 弹幕文案：每条只用一种语言，写清楚「谁 → 谁 → 哪一栏是什么」 ─────────
+
+// 档案上的每一栏：字段代号 → 中文名、英文名、cardValues 里对应的值
+const _DM_FIELDS = {
+  name: ["名字", "name", "name"],
+  breed: ["物种", "species", "breed"],
+  gender: ["性别", "gender", "gender"],
+  age: ["年龄", "age", "age"],
+  height: ["身高", "height", "height"],
+  orientation: ["性取向", "orientation", "orientation"],
+  sterilized: ["婚恋状态", "relationship status", "status"],
+  ships: ["其他关系", "other ships", "ships"],
+  mbti: ["MBTI", "MBTI", "mbti"],
+  horoscope: ["星座", "star sign", "horoscope"],
+  hukou: ["领地", "territory", "territory"],
+  vehicle: ["车", "vehicle", "vehicle"],
+  edu: ["学历", "education", "edu"],
+  occupation: ["职业", "job", "occupation"],
+  income: ["月收入", "income", "income"],
+  assets: ["总资产", "total assets", "assets"],
+  datingPurpose: ["交友目的", "dating purpose", "datingPurpose"],
+  relationshipGoal: ["期望关系", "relationship goal", "relationshipGoal"],
+  pastRelCount: ["谈过几段", "past relationships", null],
+  exContact: ["和前任的联系", "ex contact", null],
+  stillLoveEx: ["还爱不爱前任", "feelings for their ex", null],
+  whiteMoonlight: ["白月光", "lost love", null],
+  kids: ["子女", "kids", null],
+  crush: ["暗恋", "crush", null],
+  currentPartner: ["目前伴侣", "current partner", null],
+  partnerCount: ["伴侣数量", "number of partners", null],
+  ambiguous: ["暧昧对象", "situationships", null],
+  secretPartner: ["秘密伴侣", "secret partner", null],
+  foreignPartner: ["境外伴侣", "partner abroad", null],
+  otherCityPartner: ["异地伴侣", "long-distance partner", null],
+  hobby: ["爱好", "hobbies", "hobby"],
+  parents: ["家庭状况", "family", "family"],
+  standards: ["择偶标准", "standards", "standards"],
+};
+// app 里跳过理由的标签（「物种/Species」「车/Vehicle」…）取中文那半，对到字段代号
+const _DM_LABEL_ALIAS = { 车: "vehicle", 领地: "hukou", 婚恋: "sterilized", 目的: "datingPurpose", 谈过: "pastRelCount", 前任联系: "exContact", 还爱前任: "stillLoveEx", 暧昧: "ambiguous", 境外伴侣: "foreignPartner", 异地伴侣: "otherCityPartner" };
+function _dmFieldOfLabel(label) {
+  const zh = String(label || "").split("/")[0].trim();
+  if (_DM_LABEL_ALIAS[zh]) return _DM_LABEL_ALIAS[zh];
+  return Object.keys(_DM_FIELDS).find((k) => _DM_FIELDS[k][0] === zh || k === zh.toLowerCase()) || null;
+}
+
+// 「中文 / English」格式的内容拆成纯中文、纯英文（多项最多取 3 项）
+function _dmSplit(text) {
+  const segs = String(text || "")
+    .split(/\s*(?:\n|·)\s*/)
+    .map((t) => t.trim())
+    .filter(Boolean);
+  const parts = segs.map((seg) => {
+    const i = seg.search(/\s*\/\s*/);
+    if (i < 0) return { zh: seg, en: seg };
+    const m = seg.match(/^(.*?)\s*\/\s*(.*)$/);
+    return { zh: m[1].trim(), en: m[2].trim() || m[1].trim() };
+  });
+  const more = parts.length > 3;
+  const top = parts.slice(0, 3);
+  return {
+    zh: top.map((p) => p.zh).join("、") + (more ? "等" : ""),
+    en: top.map((p) => p.en).join(", ") + (more ? ", etc." : ""),
+  };
+}
+
+// 某人某一栏现在填的内容（拆好中英）；查不到返回 null
+function _dmValue(username, field) {
+  const p = _full.get(username);
+  const f = _DM_FIELDS[field];
+  if (!p || !f) return null;
+  const c = cardValues(p, { perRow: Infinity });
+  let v = f[2] ? c[f[2]] : c.relRows.flat().find((it) => it[2] === field)?.[3];
+  if (!v || v === "—") return null;
+  v = String(v);
+  if (field === "age" && /^\d+$/.test(v)) return { zh: `${v}岁`, en: `${v} years old` };
+  if (field === "height" && /^\d+$/.test(v)) return { zh: `${v}cm`, en: `${v}cm` };
+  const out = _dmSplit(v);
+  // 没有英文的内容（比如自定义城市名）：英文弹幕里不写内容，只说哪一栏
+  if (_dmHasZh(out.en)) out.en = null;
+  return out;
+}
+
+const _dmHasZh = (t) => /[\u3400-\u9fff]/.test(t);
+// 用户自己写的一句话（理由、看法）只有一种语言：只放进同一种语言的弹幕，另一条就不写这句
+// 也可以直接传 { zh, en }（假弹幕里中英都有）
+function _dmUserText(t) {
+  if (!t) return { zh: "", en: "" };
+  if (typeof t === "object") return t;
+  return _dmHasZh(t) ? { zh: t, en: "" } : { zh: "", en: t };
+}
+
+// 「小红 的MBTI是「ENFP」」/「小红's MBTI: "ENFP"」；查不到内容就只说哪一栏
+function _dmAbout(name, username, field) {
+  const f = _DM_FIELDS[field];
+  if (!f) return null;
+  const v = _dmValue(username, field);
+  return {
+    zh: v ? `${name} 的${f[0]}是「${v.zh}」` : `${name} 的${f[0]}`,
+    en: v?.en ? `${name}'s ${f[1]} being "${v.en}"` : `${name}'s ${f[1]}`,
+  };
+}
+
+// 喜欢 / 跳过 / 评价 → [中文一条, 英文一条]
+function _dmLike(by, name, username, label, reason) {
+  const field = _dmFieldOfLabel(label);
+  if (field) {
+    const a = _dmAbout(name, username, field);
+    const why = _dmReason(reason);
+    return [`${by} 很喜欢 ${a.zh}${why.zh}`, `${by} loves ${a.en}${why.en}`];
+  }
+  // 喜欢都是带开场白发的：reason 是「中文 / English」双语全文
+  if (reason) {
+    const o = _dmSplit(reason);
+    return [
+      _dmHasZh(o.zh) ? `${by} 喜欢上了 ${name}，开场白：「${o.zh}」` : `${by} 喜欢上了 ${name}`,
+      _dmHasZh(o.en) ? `${by} liked ${name}` : `${by} liked ${name} and opened with "${o.en}"`,
+    ];
+  }
+  return [`${by} 喜欢上了 ${name}`, `${by} liked ${name}`];
+}
+function _dmSkip(by, name, username, label, reason) {
+  const field = _dmFieldOfLabel(label);
+  const why = _dmReason(reason);
+  if (field) {
+    const a = _dmAbout(name, username, field);
+    return [`${by} 不太喜欢 ${a.zh}，划走了${why.zh}`, `${by} swiped past ${name}, not into ${a.en.replace(`${name}'s`, "their")}${why.en}`];
+  }
+  return [`${by} 划走了 ${name}${why.zh}`, `${by} swiped past ${name}${why.en}`];
+}
+function _dmReason(reason) {
+  const r = _dmUserText(reason);
+  return { zh: r.zh ? `，理由：${r.zh}` : "", en: r.en ? `. Reason: ${r.en}` : "" };
+}
+function _dmComment(by, name, username, field, text) {
+  const f = _DM_FIELDS[field];
+  const v = f && field !== "name" ? _dmValue(username, field) : null;
+  const t = _dmUserText(text);
+  const zhWhat = f ? `${name} 的${f[0]}${v ? `「${v.zh}」` : ""}` : name;
+  const enWhat = f ? `${name}'s ${f[1]}${v?.en ? ` "${v.en}"` : ""}` : name;
+  return [
+    t.zh ? `${by} 评价 ${zhWhat}：${t.zh}` : `${by} 评价了 ${zhWhat}`,
+    t.en ? `${by} on ${enWhat}: ${t.en}` : `${by} commented on ${enWhat}`,
+  ];
 }
 
 // ── 假弹幕生成系统 ────────────────────────────────────────
@@ -397,49 +546,6 @@ const _LIKE_REASONS = [
   "无法解释 就是感觉对 / can't explain, just feels right",
   "感觉对方很有品味 / they seem to have taste", "档案写得很真实 / profile felt genuine",
 ];
-const _COMMENT_TEMPLATES_ZH = [
-  (a, b, tag, adj) => `「${a}」评论了「${b}」的[${tag}]标签：有点${adj}`,
-  (a, b, tag, adj) => `「${a}」看了「${b}」的[${tag}]，觉得有点${adj}`,
-  (a, b, tag, adj) => `「${a}」对「${b}」的[${tag}]留下印象：${adj}`,
-  (a, b, tag, adj) => `「${a}」评价「${b}」的[${tag}]：确实有点${adj}`,
-  (a, b, tag, adj) => `「${a}」看到「${b}」写了[${tag}]，评价说：${adj}`,
-];
-const _COMMENT_TEMPLATES_EN = [
-  (a, b, tag, adj) => `"${a}" on "${b}"'s [${tag}]: kinda ${adj}`,
-  (a, b, tag, adj) => `"${a}" saw [${tag}], thought: ${adj}`,
-  (a, b, tag, adj) => `"${a}" was struck by "${b}"'s [${tag}]: ${adj}`,
-  (a, b, tag, adj) => `"${a}" rates "${b}"'s [${tag}]: genuinely ${adj}`,
-  (a, b, tag, adj) => `"${a}" read [${tag}] on "${b}"'s profile: ${adj}`,
-];
-const _LIKE_TEMPLATES_ZH = [
-  (a, b, r) => `「${a}」喜欢了「${b}」  ${r}`,
-  (a, b, r) => `「${a}」对「${b}」上头`,
-  (a, b, r) => `「${a}」给「${b}」点了喜欢  ${r}`,
-  (a, b, r) => `「${a}」→「${b}」✓  ${r}`,
-  (a, b, r) => `「${a}」[心]「${b}」  ${r}`,
-];
-const _LIKE_TEMPLATES_EN = [
-  (a, b, r) => `"${a}" liked "${b}"  ${r}`,
-  (a, b, r) => `"${a}" fell for "${b}"`,
-  (a, b, r) => `"${a}" liked "${b}"  ${r}`,
-  (a, b, r) => `"${a}" chose "${b}"  ${r}`,
-  (a, b, r) => `"${a}" hearts "${b}"  ${r}`,
-];
-const _SKIP_TEMPLATES_ZH = [
-  (a, b, r) => `「${a}」跳过了「${b}」  ${r}`,
-  (a, b, r) => `「${a}」划走了「${b}」  ${r}`,
-  (a, b, r) => `「${a}」→「${b}」✗  ${r}`,
-  (a, b, r) => `「${a}」跳过「${b}」  ${r}`,
-  (a, b, r) => `「${a}」没有选择「${b}」  ${r}`,
-];
-const _SKIP_TEMPLATES_EN = [
-  (a, b, r) => `"${a}" skipped "${b}"  ${r}`,
-  (a, b, r) => `"${a}" swiped past "${b}"  ${r}`,
-  (a, b, r) => `"${a}" passed on "${b}"  ${r}`,
-  (a, b, r) => `"${a}" skipped "${b}"  ${r}`,
-  (a, b, r) => `"${a}" didn't pick "${b}"  ${r}`,
-];
-
 function _bi(s) {
   const idx = s.indexOf(' / ');
   if (idx === -1) return { zh: s, en: s };
@@ -448,17 +554,8 @@ function _bi(s) {
 
 function _rnd(arr) { return arr[Math.floor(Math.random() * arr.length)]; }
 
-function _extractTags(p) {
-  const tags = [];
-  if (p.hobby) {
-    p.hobby.split(/\s*·\s*/).filter(Boolean).forEach((t) => tags.push(t.split("/")[0].trim()));
-  }
-  if (p.mbti) tags.push(`MBTI ${p.mbti}`);
-  if (p.breed) tags.push(p.breed.split(" · ").pop().split(" / ")[0].trim());
-  if (p.occupation) tags.push(p.occupation);
-  if (p.edu) tags.push(p.edu.split("/")[0].trim());
-  return tags.filter((t) => t.length > 0 && t.length < 12);
-}
+// 假弹幕里拿来说事的栏目（短、而且每个人基本都填了）
+const _DM_FAKE_FIELDS = ["breed", "mbti", "horoscope", "occupation", "edu", "income", "hobby", "orientation", "height", "age"];
 
 function buildFakeDanmakuPool(profiles) {
   if (profiles.length < 2) return [];
@@ -475,27 +572,26 @@ function buildFakeDanmakuPool(profiles) {
 
     picks.forEach((b) => {
       const bName = b.name || b.username;
+      const push = (type, [zh, en]) => pool.push({ text: zh, type }, { text: en, type });
+      // 有内容的栏目里随机挑一栏
+      const fields = _DM_FAKE_FIELDS.filter((f) => _dmValue(b.username, f));
+      const field = fields.length ? _rnd(fields) : null;
 
-      // like — one zh, one en
+      // like：喜欢的理由
       const likeReason = _bi(_rnd(_LIKE_REASONS));
-      const likeIdx = Math.floor(Math.random() * _LIKE_TEMPLATES_ZH.length);
-      pool.push({ text: _LIKE_TEMPLATES_ZH[likeIdx](aName, bName, likeReason.zh), type: "like" });
-      pool.push({ text: _LIKE_TEMPLATES_EN[likeIdx](aName, bName, likeReason.en), type: "like" });
+      push("like", [`${aName} 喜欢上了 ${bName}：${likeReason.zh}`, `${aName} liked ${bName}: ${likeReason.en}`]);
 
-      // skip — one zh, one en
-      const skipReason = _bi(_rnd(_SKIP_REASONS));
-      const skipIdx = Math.floor(Math.random() * _SKIP_TEMPLATES_ZH.length);
-      pool.push({ text: _SKIP_TEMPLATES_ZH[skipIdx](aName, bName, skipReason.zh), type: "skip" });
-      pool.push({ text: _SKIP_TEMPLATES_EN[skipIdx](aName, bName, skipReason.en), type: "skip" });
+      // skip：一半说具体哪一栏，一半说理由
+      if (field && Math.random() < 0.5) push("skip", _dmSkip(aName, bName, b.username, _DM_FIELDS[field][0], ""));
+      else {
+        const skipReason = _bi(_rnd(_SKIP_REASONS));
+        push("skip", [`${aName} 划走了 ${bName}：${skipReason.zh}`, `${aName} swiped past ${bName}: ${skipReason.en}`]);
+      }
 
-      // comment — one zh, one en
-      const tags = _extractTags(b);
-      if (tags.length > 0) {
-        const tag = _rnd(tags);
+      // comment：评价某一栏
+      if (field) {
         const adj = _bi(_rnd(_ADJ));
-        const tplIdx = Math.floor(Math.random() * _COMMENT_TEMPLATES_ZH.length);
-        pool.push({ text: _COMMENT_TEMPLATES_ZH[tplIdx](aName, bName, tag, adj.zh), type: "comment" });
-        pool.push({ text: _COMMENT_TEMPLATES_EN[tplIdx](aName, bName, tag, adj.en), type: "comment" });
+        push("comment", _dmComment(aName, bName, b.username, field, { zh: `有点${adj.zh}`, en: `kinda ${adj.en}` }));
       }
     });
   }
@@ -685,10 +781,7 @@ function pushTickerMessage(text, type = "alert") {
 // ── Socket.io 实时事件 ─────────────────────────────────
 
 socket.on("like-event", (data) => {
-  const zhReason = data.label && data.reason ? `  因为[${data.label}]觉得：${data.reason}` : "";
-  const enReason = data.label && data.reason ? `  because [${data.label}]: ${data.reason}` : "";
-  spawnDanmaku(`${data.by} 对 ${data.name} 上头了${zhReason}`, "like");
-  spawnDanmaku(`"${data.by}" fell for "${data.name}"${enReason}`, "like");
+  _dmLike(data.by, data.name, data.username, data.label, data.reason).forEach((t) => spawnDanmaku(t, "like"));
 
   const profile = ranking.find((p) => p.name === data.name);
   if (data.likesCount !== undefined) {
@@ -715,19 +808,15 @@ socket.on("like-event", (data) => {
 });
 
 socket.on("skip-event", (data) => {
-  const zhReason = data.label && data.reason ? `  因为[${data.label}]：${data.reason}` : "";
-  const enReason = data.label && data.reason ? `  [${data.label}]: ${data.reason}` : "";
-  spawnDanmaku(`${data.by} 划走了 ${data.name}${zhReason}`, "skip");
-  spawnDanmaku(`"${data.by}" skipped "${data.name}"${enReason}`, "skip");
+  _dmSkip(data.by, data.name, data.username, data.label, data.reason).forEach((t) => spawnDanmaku(t, "skip"));
 });
 
 socket.on("interpretation-event", (data) => {
   // Danmaku always fires regardless of which profile is on spotlight
   const targetIdx = ranking.findIndex(p => p.username === data.profileUsername);
   const targetProfile = targetIdx >= 0 ? ranking[targetIdx] : null;
-  const tName = targetProfile?.name || data.profileUsername;
-  spawnDanmaku(`${data.addedBy} 评价了 ${tName} 的[${data.field}]`, "comment");
-  spawnDanmaku(`"${data.addedBy}" commented on "${tName}"'s [${data.field}]`, "comment");
+  const tName = targetProfile?.name || _full.get(data.profileUsername)?.name || data.profileUsername;
+  _dmComment(data.addedBy, tName, data.profileUsername, data.field, data.text).forEach((t) => spawnDanmaku(t, "comment"));
 
   if (!targetProfile) {
     // Profile not in ranking yet — re-rank immediately, then jump to it

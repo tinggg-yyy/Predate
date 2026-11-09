@@ -20,11 +20,14 @@
   --green: #283023;
   --green-dim: rgba(46, 54, 40, 0.55);
   --green-glow: rgba(46, 54, 40, 0.1);
-  --dark: #828980;
-  --cell: #b8c0b3;
+  --dark: #8c928a;
+  --cell: #bec5b9;
+  /* 和 app 的深色格子（--grid-dark）一样用墨色细线，线宽占格子的 1/4。
+     用一小块格子平铺（--grid-size），不用 repeating-linear-gradient：后者重复几百次会累积误差，线粗细不一 */
   --grid-bg:
-    repeating-linear-gradient(0deg, transparent, transparent 7px, rgba(255,255,255,0.22) 7px, rgba(255,255,255,0.22) 8px),
-    repeating-linear-gradient(90deg, transparent, transparent 7px, rgba(255,255,255,0.22) 7px, rgba(255,255,255,0.22) 8px);
+    linear-gradient(0deg, rgba(40,48,35,0.16) 3px, transparent 3px),
+    linear-gradient(90deg, rgba(40,48,35,0.16) 3px, transparent 3px);
+  --grid-size: 12px 12px;
 
   /* TV HDMI colour correction — adjust these three values to taste */
   --tv-brightness: 0.68;
@@ -36,8 +39,9 @@ html, body {
   width: 2160px;
   height: 3840px;
   overflow: hidden;
-  background: #949b8e;
+  background: #9da397;
   background-image: var(--grid-bg);
+  background-size: var(--grid-size);
 }
 
 /* ── BOARD — the dark grid canvas everything sits on ── */
@@ -52,11 +56,12 @@ html, body {
   overflow: hidden;
   background: var(--dark);
   background-image: var(--grid-bg);
+  background-size: var(--grid-size);
 }
 
 /* ── HEADER ── */
 .board-header {
-  background: #b4bbaf;
+  background: #bac0b5;
   color: var(--green);
   display: flex;
   align-items: center;
@@ -332,7 +337,6 @@ html, body {
   overflow: hidden;
   width: 100%;
   padding-top: 20px;
-  border-top: 2px solid rgba(255, 80, 80, 0.2);
 }
 
 .pixel-emoji {
@@ -341,8 +345,10 @@ html, body {
   image-rendering: pixelated;
 }
 
+/* 呕吐图小一号，但左右补齐到和爱心一样宽，上下两排才对得齐 */
 .pixel-emoji-skip {
   width: 80px;
+  margin: 0 10px;
 }
 
 .stat-empty {
