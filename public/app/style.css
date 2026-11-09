@@ -750,7 +750,8 @@ li.other .words {
   height: auto;
   aspect-ratio: 1 / 1;
   object-fit: cover;
-  image-rendering: pixelated;
+  /* 头像是按格子画好的大图，缩小显示要平滑缩放；pixelated 缩小会随机丢掉格子缝，格子看起来大小不一 */
+  image-rendering: auto;
   display: block;
 }
 
@@ -1986,13 +1987,13 @@ li.other .words {
   display: flex;
   flex-direction: column;
   gap: 14px;
-  box-shadow: 3px 3px 0 rgba(0,0,0,0.3), 0 0 12px rgba(200,40,40,0.25), 0 0 28px rgba(200,40,40,0.12);
+  box-shadow: 3px 3px 0 rgba(0,0,0,0.3), 0 0 12px rgb(var(--ink-rgb) / 0.25), 0 0 28px rgb(var(--ink-rgb) / 0.12);
   animation: warnBoxPulse 1.4s ease-in-out infinite alternate;
 }
 
 @keyframes warnBoxPulse {
-  from { box-shadow: 3px 3px 0 rgba(0,0,0,0.3), 0 0 8px rgba(200,40,40,0.20), 0 0 20px rgba(200,40,40,0.08); }
-  to   { box-shadow: 3px 3px 0 rgba(0,0,0,0.3), 0 0 18px rgba(200,40,40,0.40), 0 0 40px rgba(200,40,40,0.18); }
+  from { box-shadow: 3px 3px 0 rgba(0,0,0,0.3), 0 0 8px rgb(var(--ink-rgb) / 0.20), 0 0 20px rgb(var(--ink-rgb) / 0.08); }
+  to   { box-shadow: 3px 3px 0 rgba(0,0,0,0.3), 0 0 18px rgb(var(--ink-rgb) / 0.40), 0 0 40px rgb(var(--ink-rgb) / 0.18); }
 }
 
 .warning-icon {
@@ -2004,10 +2005,10 @@ li.other .words {
   animation: warnPulse 0.5s ease-in-out infinite alternate;
 }
 
-/* 纯红像素三角：两层红光叠加，一明一暗地发光 */
+/* 像素三角跟着配色的墨色（和字一个颜色）：两层光叠加，一明一暗地发光 */
 @keyframes warnPulse {
-  from { filter: drop-shadow(0 0 2px #ff0000) drop-shadow(0 0 6px rgba(255,0,0,0.5)); }
-  to   { filter: drop-shadow(0 0 4px #ff0000) drop-shadow(0 0 18px rgba(255,0,0,1)); }
+  from { filter: drop-shadow(0 0 2px rgb(var(--ink-rgb) / 0.8)) drop-shadow(0 0 6px rgb(var(--ink-rgb) / 0.5)); }
+  to   { filter: drop-shadow(0 0 4px rgb(var(--ink-rgb))) drop-shadow(0 0 18px rgb(var(--ink-rgb) / 1)); }
 }
 
 .warning-block {
@@ -2015,13 +2016,13 @@ li.other .words {
   background: rgba(0, 0, 0, 0.06);
   padding: 10px 12px;
   text-align: left;
-  box-shadow: 0 0 6px rgba(200,40,40,0.10);
+  box-shadow: 0 0 6px rgb(var(--ink-rgb) / 0.10);
 }
 
 .warning-block.critical {
   border-color: rgb(var(--line-rgb) / 0.55);
   background: rgba(0, 0, 0, 0.10);
-  box-shadow: 0 0 10px rgba(200,40,40,0.18);
+  box-shadow: 0 0 10px rgb(var(--ink-rgb) / 0.18);
 }
 
 .warning-line {
@@ -2029,13 +2030,13 @@ li.other .words {
   font-size: 11px;
   margin: 3px 0;
   line-height: 1.5;
-  text-shadow: 0 0 6px rgba(220,40,40,0.30);
+  text-shadow: 0 0 6px rgb(var(--ink-rgb) / 0.30);
 }
 
 .warning-block.critical .warning-line:first-child {
   font-size: 12px;
   font-weight: bold;
-  text-shadow: 0 0 8px rgba(220,40,40,0.50);
+  text-shadow: 0 0 8px rgb(var(--ink-rgb) / 0.50);
 }
 
 .warning-btn-row {
@@ -2497,7 +2498,8 @@ html[data-lang="both"] .mbti-custom-btn .en {
   flex-shrink: 0;
   width: 52px;
   height: 52px;
-  image-rendering: pixelated;
+  /* 头像是按格子画好的大图，缩小显示要平滑缩放；pixelated 缩小会随机丢掉格子缝，格子看起来大小不一 */
+  image-rendering: auto;
   border: 1px solid rgb(var(--line-rgb) / 0.55);
 }
 .rank-info {

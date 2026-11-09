@@ -5580,7 +5580,7 @@ function buildWarnings(me, target) {
 
 function showLikeWarning(warnings) {
   const hasCritical = warnings.some((w) => w.level === "critical");
-  document.getElementById("warning-icon").innerHTML = iconImg("warn_big", 6, "#ff0000");
+  document.getElementById("warning-icon").innerHTML = iconImg("warn_big", 6);
   document.getElementById("warning-icon").className = hasCritical
     ? "warning-icon critical"
     : "warning-icon";

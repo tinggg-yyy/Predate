@@ -992,13 +992,15 @@ function _glyphBox(ctx, ch) {
   return box;
 }
 
-// 在 ctx 上画整张 32×32 的画，边长 size（CSS 像素）
-function drawPixelGrid(ctx, grid, gridText, size) {
+// 在 ctx 上画整张 32×32 的画，边长 size（CSS 像素）；dpr：画布的像素密度（画图页 p5 是 pixelDensity()）
+// 缝、阴影、字号都按格子大小的固定比例，再对齐到设备像素：大小不同的画布看起来比例一样，边缘也清楚
+function drawPixelGrid(ctx, grid, gridText, size, dpr = 1) {
   if (!_isValidGrid(grid)) grid = _blankGrid();
   const { bg, dead, ink } = _pixelGridColors();
+  const snap = (v) => Math.max(1, Math.round(v * dpr)) / dpr;
   const cell = size / 32;
-  const gap = Math.max(1, Math.round(cell / 16)); // 格子之间的缝（每边）
-  const shadow = Math.max(1, Math.round((cell * 3) / 32));
+  const gap = snap(cell / 9); // 格子之间的缝（每边）
+  const shadow = snap((cell * 3) / 32);
   const text = gridText || "";
 
   ctx.save();
@@ -1010,8 +1012,8 @@ function drawPixelGrid(ctx, grid, gridText, size) {
     for (let x = 0; x < 32; x++) ctx.fillRect(x * cell + gap, y * cell + gap, cell - gap * 2, cell - gap * 2);
   }
 
-  // Zpix 是 12px 的点阵字：字号取 12 的倍数最清楚（1024 的大图上一格 32px → 24px 字）
-  const fontPx = cell >= 24 ? Math.floor((cell - gap * 2) / 12) * 12 : Math.round(cell * 0.75);
+  // 字占格子的 2/3（头像大图一格 36px → 24px，正好是 Zpix 点阵 12px 的两倍）
+  const fontPx = snap((cell * 2) / 3);
   ctx.font = `${fontPx}px "Zpix", monospace`;
   ctx.textAlign = "left";
   ctx.textBaseline = "alphabetic";
@@ -1043,15 +1045,13 @@ function drawPixelGrid(ctx, grid, gridText, size) {
   ctx.restore();
 }
 
-// outSize：输出图片的边长。默认 1024（档案卡大图）；排行榜列表的小头像用小尺寸，画得快、占内存少。
-// 里面一律按 1024 的坐标画，再整体缩放到 outSize
-function renderGridAsAvatar(grid, gridText, outSize = 1024) {
+// outSize：输出图片的边长。默认 1152（档案卡大图，一格 36px）；排行榜列表的小头像用小尺寸，画得快、占内存少。
+// 直接按 outSize 画（不是画大再缩），小图的格子缝也对齐到像素
+function renderGridAsAvatar(grid, gridText, outSize = 1152) {
   const canvas = document.createElement("canvas");
   canvas.width = outSize;
   canvas.height = outSize;
-  const ctx = canvas.getContext("2d");
-  if (outSize !== 1024) ctx.scale(outSize / 1024, outSize / 1024);
-  drawPixelGrid(ctx, grid, gridText, 1024);
+  drawPixelGrid(canvas.getContext("2d"), grid, gridText, outSize);
   return canvas.toDataURL();
 }
 

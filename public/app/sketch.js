@@ -26,7 +26,7 @@ function setup() {
 // 跟档案头像共用 drawPixelGrid（shared/card-data.js）：画的时候和生成出来的头像一模一样
 function draw() {
   clear();
-  drawPixelGrid(drawingContext, grid, currentText, width);
+  drawPixelGrid(drawingContext, grid, currentText, width, pixelDensity());
 }
 
 // P5 touch events: https://p5js.org/reference/#Touch

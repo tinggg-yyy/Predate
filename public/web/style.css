@@ -165,7 +165,8 @@ html, body {
   width: 680px;
   height: 680px;
   object-fit: contain;
-  image-rendering: pixelated;
+  /* 头像是按格子画好的大图，缩小显示要平滑缩放；pixelated 缩小会随机丢掉格子缝，格子看起来大小不一 */
+  image-rendering: auto;
 }
 
 /* ── SCORE STAMP (circular, like app) ── */
