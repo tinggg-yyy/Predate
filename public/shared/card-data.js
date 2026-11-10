@@ -47,8 +47,8 @@ const DISP = {
   大平层: "大平层 / Luxury Flat",
   别墅: "别墅 / Villa",
   // city/region special types
-  四合院: "四合院 / Courtyard House ✨",
-  老洋房: "老洋房 / Heritage Villa ✨",
+  四合院: "四合院 / Courtyard House",
+  老洋房: "老洋房 / Heritage Villa",
   石库门: "石库门 / Shikumen",
   吊脚楼: "吊脚楼 / Stilt House",
   蒙古包: "蒙古包 / Yurt",
@@ -60,16 +60,16 @@ const DISP = {
   东北民居: "东北民居 / NE Homestead",
   // garden
   无院子: "无院子 / No Garden",
-  有院子: "有院子 / Garden ✨",
+  有院子: "有院子 / Garden",
   // tenure
   租住中: "租住中 / Renting",
   购买: "购买 / Owned",
   // ownership
   父母名下: "父母名下 / Parents",
-  自己名下: "自己名下 / Self ✨",
+  自己名下: "自己名下 / Self",
   // mortgage
   有房贷: "有房贷 / Mortgaged",
-  无房贷: "无房贷 / Paid Off ✨",
+  无房贷: "无房贷 / Paid Off",
   // education
   小学: "小学 / Primary School",
   初中: "初中 / Middle School",
@@ -99,7 +99,7 @@ const DISP = {
   "80w-300w": "80w-300w / ¥800k-3,000k",
   "300w+": "300w+ / ¥3,000k+",
   // parents status
-  "都健在": "都健在 / Both Alive ✨",
+  "都健在": "都健在 / Both Alive",
   "仅父亲健在": "仅父亲健在 / Father Alive",
   "仅母亲健在": "仅母亲健在 / Mother Alive",
   "均已故": "均已故 / Both Passed",
@@ -113,7 +113,8 @@ const DISP = {
   "普通": "普通 / Average",
   "小康": "小康 / Comfortable",
   "富裕": "富裕 / Wealthy",
-  "富裕✨": "富裕 ✨ / Very Wealthy ✨",
+  "富裕✨": "很富裕 / Very Wealthy", // 老档案里存的是「富裕✨」
+  "很富裕": "很富裕 / Very Wealthy",
   // district / neighborhood
   "郊区": "郊区 / Suburb",
   "老城区": "老城区 / Old Town",
@@ -226,7 +227,8 @@ const DISP = {
   "普通/Ordinary": "普通 / Ordinary",
   "和睦/Harmonious": "和睦 / Harmonious",
   "恩爱/Loving": "恩爱 / Loving",
-  "神仙眷侣/Perfect Couple ✨": "神仙眷侣 / Perfect Couple ✨",
+  "神仙眷侣/Perfect Couple ✨": "神仙眷侣 / Perfect Couple", // 老档案
+  "神仙眷侣/Perfect Couple": "神仙眷侣 / Perfect Couple",
 };
 
 // 「1.5w元」「3000元」「3w+」→「¥15k」「¥3k」「¥30k+」

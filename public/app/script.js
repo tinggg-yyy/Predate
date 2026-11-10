@@ -798,7 +798,7 @@ const FIELD_SCORES = {
   // 父母关系
   "parents-relationship": {
     "离婚/Divorced": -5, "冷战/Cold War": -3, "普通/Ordinary": 0, "和睦/Harmonious": +2, "恩爱/Loving": +3,
-    "神仙眷侣/Perfect Couple ✨": +5,
+    "神仙眷侣/Perfect Couple": +5, "神仙眷侣/Perfect Couple ✨": +5,
   },
   // 房子：区域
   "house-district": {
@@ -2799,7 +2799,7 @@ const HOUSING_TIERS = {
     3: "普通/Ordinary",
     4: "和睦/Harmonious",
     5: "恩爱/Loving",
-    6: "神仙眷侣/Perfect Couple ✨",
+    6: "神仙眷侣/Perfect Couple",
   },
   siblingCount: {
     1: "独生/Only Child",
@@ -2810,7 +2810,7 @@ const HOUSING_TIERS = {
     6: "4个+/4+ Siblings",
   },
   siblingWealthBySpecies: {
-    "哺乳类": { 1:"经济困难", 2:"普通",     3:"小康",     4:"小康",   5:"富裕",   6:"富裕✨" },
+    "哺乳类": { 1:"经济困难", 2:"普通",     3:"小康",     4:"小康",   5:"富裕",   6:"很富裕" },
     "鸟类":   { 1:"经济困难", 2:"经济困难", 3:"普通",     4:"小康",   5:"小康",   6:"富裕"  },
     "爬行类": { 1:"经济困难", 2:"经济困难", 3:"经济困难", 4:"普通",   5:"普通",   6:"小康"  },
     "两栖类": { 1:"经济困难", 2:"经济困难", 3:"经济困难", 4:"普通",   5:"普通",   6:"小康"  },
@@ -2967,7 +2967,8 @@ const SCORE_DEDUCTIONS = {
   "普通": 0,
   "小康": +2,
   "富裕": +4,
-  "富裕✨": +6,
+  "很富裕": +6,
+  "富裕✨": +6, // 老档案
   // 种族大类歧视链 / Species hierarchy — only 哺乳类 gets bonus
   "哺乳类 / Mammals": +5,
   "鸟类 / Birds": 0,
@@ -3222,7 +3223,7 @@ function getHousingDescription() {
   if (area) parts.push(`${area}㎡`);
   if (type)
     parts.push(type === "别墅" ? `${disp(type)}(${villaFloors})` : disp(type));
-  if (garden === "有院子") parts.push("有院子 / Garden ✨");
+  if (garden === "有院子") parts.push("有院子 / Garden");
   if (aptFloor && aptTotal)
     parts.push(`${aptFloor}/共${aptTotal} fl.`);
   else if (aptFloor) parts.push(`${aptFloor}`);
@@ -4170,7 +4171,7 @@ const _TUT_STEPS = {
   likeBtn: { target: () => _tutBtn(0), open: true, zh: "心动了吗？\n点这颗爱心，冲！", en: "Feeling the spark?\nHit that heart!" },
   warn: { popup: true, target: () => document.querySelector("#warning-overlay .warning-box"), zh: "哎呀，系统觉得这段关系有点危险\n但你要是铁了心，就继续吧", en: "Uh-oh. The system sees a little red flag.\nStill wanna go for it? Be our guest." },
   opener: { popup: true, target: () => document.querySelector("#like-opener-popup .opener-modal"), zh: "选一句开场白，发给 ta！\n说得好会加分，说得烂可是要扣分的", en: "Pick an opener and send it!\nGood lines earn points, bad ones cost you." },
-  done: { zh: "好啦，功能导览结束！\n去认识你的下一位嘉宾吧", en: "And that's the tour!\nGo meet your next potential match. 👀", next: "finish", btn: ["开始", "Let's go"], noSkip: true },
+  done: { zh: "好啦，功能导览结束！\n去认识你的下一位嘉宾吧", en: "And that's the tour!\nGo meet your next potential match.", next: "finish", btn: ["开始", "Let's go"], noSkip: true },
 };
 // 进度编号只算纸上的步骤，不算弹窗里的提示
 const _TUT_ORDER = ["longpress", "tap", "agree", "impressBtn", "impDone", "skipInfo", "msgInfo", "rankInfo", "meInfo", "likeBtn"];
@@ -4692,7 +4693,7 @@ function initPixelButtons() {
   });
   // replace ⚠️ warning icon div
   const warnEl = document.getElementById("warning-icon");
-  if (warnEl) warnEl.textContent = "⚠️";
+  if (warnEl) warnEl.textContent = "";
 }
 
 // Register heart_sm pattern at module level so it's always available
@@ -6579,8 +6580,8 @@ const _FAKE_MSG_POOL = [
   "你好漂亮，敢问芳名吗？ / You're gorgeous, may I ask your name?",
   "我摇到了一套超好的房子，想请你来参观 / I rolled an amazing property, I'd love to show you around",
   "你的MBTI是我最喜欢的类型！！ / Your MBTI is my favorite type!!",
-  "嗨，你是我今天看到最好看的档案 ✨ / Hey, you're the best-looking profile I've seen today ✨",
-  "我在附近，要不要出来喝杯咖啡 ☕ / I'm nearby, want to grab a coffee? ☕",
+  "嗨，你是我今天看到最好看的档案 / Hey, you're the best-looking profile I've seen today",
+  "我在附近，要不要出来喝杯咖啡 / I'm nearby, want to grab a coffee?",
   "你好，冒昧打扰，我觉得你很特别 / Hi, sorry to bother you, but I think you're really special",
   "你有在玩游戏吗？可以一起吗？ / Do you play games? Can we play together?",
   "哇你真的很符合我的理想型…… / Wow, you really match my ideal type...",
@@ -6605,23 +6606,23 @@ const _FAKE_MSG_POOL = [
 const _FAKE_ALERT_POOL = [
   {
     from: "系统通知 / System Notice",
-    content: "⚠️ 警告：你已超过3天没有更新档案，魅力值持续下降 / ⚠️ Warning: you haven't updated your profile in 3 days, your charm keeps dropping",
+    content: "警告：你已超过3天没有更新档案，魅力值持续下降 / Warning: you haven't updated your profile in 3 days, your charm keeps dropping",
   },
-  { from: "系统通知 / System Notice", content: "⚠️ 你的配对成功率低于行业平均水平12% / ⚠️ Your match rate is 12% below the industry average" },
+  { from: "系统通知 / System Notice", content: "你的配对成功率低于行业平均水平12% / Your match rate is 12% below the industry average" },
   {
     from: "系统通知 / System Notice",
-    content: "👀 本周已有47只兽人查看了你的档案，但无人主动打招呼 / 👀 47 anthros viewed your profile this week, but no one said hi",
+    content: "本周已有47只兽人查看了你的档案，但无人主动打招呼 / 47 anthros viewed your profile this week, but no one said hi",
   },
-  { from: "系统通知 / System Notice", content: "⚠️ 检测到你有3条消息超过24小时未回复 / ⚠️ You have 3 messages unanswered for over 24 hours" },
-  { from: "系统通知 / System Notice", content: "💔 有人刚刚把你从收藏列表中移除了 / 💔 Someone just removed you from their favorites" },
-  { from: "系统通知 / System Notice", content: "⚠️ 你的账号活跃度即将降为低级，将减少曝光 / ⚠️ Your account activity is about to drop to Low, reducing your exposure" },
-  { from: "系统通知 / System Notice", content: "❌ 本周你被跳过的次数较上周上升了34% / ❌ Times you got skipped this week are up 34% from last week" },
+  { from: "系统通知 / System Notice", content: "检测到你有3条消息超过24小时未回复 / You have 3 messages unanswered for over 24 hours" },
+  { from: "系统通知 / System Notice", content: "有人刚刚把你从收藏列表中移除了 / Someone just removed you from their favorites" },
+  { from: "系统通知 / System Notice", content: "你的账号活跃度即将降为低级，将减少曝光 / Your account activity is about to drop to Low, reducing your exposure" },
+  { from: "系统通知 / System Notice", content: "本周你被跳过的次数较上周上升了34% / Times you got skipped this week are up 34% from last week" },
   {
     from: "系统通知 / System Notice",
-    content: "⚠️ 有人查看了你的档案3次但没有打招呼，可能在犹豫 / ⚠️ Someone viewed your profile 3 times without saying hi, they may be hesitating",
+    content: "有人查看了你的档案3次但没有打招呼，可能在犹豫 / Someone viewed your profile 3 times without saying hi, they may be hesitating",
   },
-  { from: "系统通知 / System Notice", content: "💬 你有2条未回复消息，对方可能已经等不及了 / 💬 You have 2 unanswered messages, they may be running out of patience" },
-  { from: "系统通知 / System Notice", content: "⚠️ 系统检测：你的照片吸引力评分低于平均值 / ⚠️ System check: your photo attractiveness score is below average" },
+  { from: "系统通知 / System Notice", content: "你有2条未回复消息，对方可能已经等不及了 / You have 2 unanswered messages, they may be running out of patience" },
+  { from: "系统通知 / System Notice", content: "系统检测：你的照片吸引力评分低于平均值 / System check: your photo attractiveness score is below average" },
 ];
 
 const _MIXED_BLOOD_MSG_POOL = [
@@ -6638,23 +6639,23 @@ const _MIXED_BLOOD_MSG_POOL = [
 ];
 
 const _MIXED_BLOOD_ALERT_POOL = [
-  { from: "系统通知 / System Notice", content: "⚠️ 系统检测：混血档案配对成功率比纯种低67% / ⚠️ System check: mixed profiles match 67% less often than purebreds" },
-  { from: "系统通知 / System Notice", content: "❌ 你的档案因混血标注被12名用户主动屏蔽 / ❌ 12 users blocked your profile because of the mixed-heritage tag" },
+  { from: "系统通知 / System Notice", content: "系统检测：混血档案配对成功率比纯种低67% / System check: mixed profiles match 67% less often than purebreds" },
+  { from: "系统通知 / System Notice", content: "你的档案因混血标注被12名用户主动屏蔽 / 12 users blocked your profile because of the mixed-heritage tag" },
   {
     from: "系统通知 / System Notice",
-    content: "⚠️ 大数据提示：混血档案在本地区配对指数处于最低段位 / ⚠️ Big data alert: mixed profiles rank lowest in local match index",
+    content: "大数据提示：混血档案在本地区配对指数处于最低段位 / Big data alert: mixed profiles rank lowest in local match index",
   },
   {
     from: "系统通知 / System Notice",
-    content: "💔 系统检测：3名用户看到你的混血背景后取消了配对 / 💔 System check: 3 users unmatched after seeing your mixed background",
+    content: "系统检测：3名用户看到你的混血背景后取消了配对 / System check: 3 users unmatched after seeing your mixed background",
   },
   {
     from: "系统通知 / System Notice",
-    content: "⚠️ 混血用户的曝光度已被系统调降，请升级会员以恢复可见度 / ⚠️ Mixed users' visibility has been lowered, upgrade to Premium to restore it",
+    content: "混血用户的曝光度已被系统调降，请升级会员以恢复可见度 / Mixed users' visibility has been lowered, upgrade to Premium to restore it",
   },
   {
     from: "系统通知 / System Notice",
-    content: "⚠️ 平台提示：你的混血背景在本周筛选中被过滤了 8 次 / ⚠️ Platform notice: your mixed background got filtered out 8 times this week",
+    content: "平台提示：你的混血背景在本周筛选中被过滤了 8 次 / Platform notice: your mixed background got filtered out 8 times this week",
   },
 ];
 
