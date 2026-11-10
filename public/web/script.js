@@ -136,7 +136,6 @@ function showSpotlight(idx) {
     <div class="card">
       ${row([cell("性别", "Gender", "gender", c.gender), cell("年龄", "Age", "age", c.age), cell("身高", "Height", "height", c.height)])}
       ${row([cell("性取向", "Orientation", "orientation", c.orientation), cell("婚恋", "Status", "sterilized", c.status), ...(c.neutered ? [cell("绝育", "Sterilized", "neutered", c.neutered)] : [])])}
-      ${c.ships ? section("其他关系", "Other Ships", "ships", c.ships) : ""}
       ${row([cell("MBTI", "", "mbti", c.mbti), cell("星座", "Horoscope", "horoscope", c.horoscope)])}
 
       ${section("领地", "Territory", "hukou", c.territory)}
@@ -145,6 +144,7 @@ function showSpotlight(idx) {
       ${row([cell("学历", "Education", "edu", c.edu, "cell-sm"), cell("职业", "Job", "occupation", c.occupation, "cell-sm"), cell("月收入", "Income", "income", c.income, "cell-sm")])}
       ${row([cell("目的", "Here For", "datingPurpose", c.datingPurpose, "cell-sm"), cell("期望关系", "Looking For", "relationshipGoal", c.relationshipGoal, "cell-sm")])}
       ${c.relRows.map((r) => row(r.map(([zh, en, key, text]) => cell(zh, en, key, text, "cell-sm")))).join("")}
+      ${c.ships ? section("其他关系", "Other Ships", "ships", c.ships) : ""}
 
       ${section("兴趣爱好", "Hobbies", "hobby", c.hobby)}
       ${section("家庭状况", "Family", "parents", c.family)}
@@ -189,8 +189,30 @@ function showSpotlight(idx) {
     });
   });
 
+  _fitValues();
   resetProgress();
 }
+
+// 大屏每一行的高度是按屏幕平均分的，格子不会跟着内容变高：
+// 内容太长（比如领地的中文折成两行）放不下时，把这一格的字一点点调小，直到放得下（最小 28px）
+function _fitValues() {
+  document.querySelectorAll("#spotlight .cell, #spotlight .section").forEach((box) => {
+    const v = box.querySelector(":scope > .value");
+    if (!v) return;
+    v.style.fontSize = "";
+    // 飘在外面的评论红字不算（量的时候先藏起来）
+    const bubbles = [...box.querySelectorAll(".web-interp-bubble")];
+    bubbles.forEach((b) => (b.style.display = "none"));
+    let size = parseFloat(getComputedStyle(v).fontSize);
+    while (box.scrollHeight > box.clientHeight + 1 && size > 28) {
+      size -= 2;
+      v.style.fontSize = `${size}px`;
+    }
+    bubbles.forEach((b) => (b.style.display = ""));
+  });
+}
+// 像素字体加载完后字宽会变，再量一次
+document.fonts?.ready.then(() => _fitValues());
 
 // ── 轮播：每一名展示多久（底下的进度条也跟着这个时长走）──────────
 const CYCLE_MS = 20000;

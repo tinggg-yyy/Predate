@@ -1215,8 +1215,20 @@ function cardValues(profile, { perRow = 3 } = {}) {
     ["境外伴侣", "Foreign", "foreignPartner"],
     ["异地伴侣", "Long Dist", "otherCityPartner"],
   ].filter(([, , key]) => rel[key]).map(([zh, en, key]) => [zh, en, key, rel[key]]);
+  // 没谈过恋爱（没有前任那两项）：谈过 + 子女一行（都是数字），暗恋 + 白月光一行
+  if (!rel.exContact && !rel.stillLoveEx) {
+    const order = ["pastRelCount", "kids", "crush", "whiteMoonlight"];
+    const rank = (key) => (order.includes(key) ? order.indexOf(key) : order.length);
+    relItems.sort((a, b) => rank(a[2]) - rank(b[2]));
+  }
+  // 每行最多 3 格，但不让一格单独一行：4 格排 2+2，5 格 3+2，7 格 3+2+2
   const relRows = [];
-  for (let i = 0; i < relItems.length; i += 3) relRows.push(relItems.slice(i, i + 3));
+  const nRows = Math.ceil(relItems.length / 3);
+  for (let r = 0, i = 0; r < nRows; r++) {
+    const size = Math.floor(relItems.length / nRows) + (r < relItems.length % nRows ? 1 : 0);
+    relRows.push(relItems.slice(i, i + size));
+    i += size;
+  }
 
   // 其他关系 ship：选了「都没有」或没填就不显示
   const ships = (rel.ships || "").split(" · ").filter((v) => v && v !== REL_SHIP_NONE);

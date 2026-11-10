@@ -2397,7 +2397,8 @@ function _watchSteps(sectionId, update) {
 
 // ── 房子页 ──
 const _HOUSE_VILLA_TYPES = ["别墅", "四合院", "老洋房"];
-const _HOUSE_APT_TYPES = ["公寓", "大平层", "普通住宅", "石库门"];
+// 楼房才问住第几层、一共几层（石库门是两三层的老弄堂房子，不问）
+const _HOUSE_APT_TYPES = ["公寓", "大平层", "普通住宅"];
 const _HOUSE_STEPS = [
   { el: "house-step-district", value: "house-district", label: "区域", labelEn: "District" },
   { el: "house-step-type", value: "house-type", label: "房屋类型", labelEn: "House type" },
@@ -3051,7 +3052,7 @@ function rollHousingFieldDice(field, prefix) {
         text = disp(value);
         document.getElementById(`${prefix}-type`).value = value;
         const isVilla = value === "别墅" || value === "四合院" || value === "老洋房";
-        const isApt = value === "公寓" || value === "大平层" || value === "普通住宅" || value === "石库门";
+        const isApt = _HOUSE_APT_TYPES.includes(value);
         // 别墅层数 / 院子 / 楼层 什么时候出现由 _updateHouseSteps 决定（一项一项出现）
         if (!isVilla) {
           document.getElementById(`${prefix}-garden`).value = "";
@@ -3161,12 +3162,13 @@ function rollHousingFieldDice(field, prefix) {
           if (tb) { tb.dataset.rolls = "0"; tb.disabled = false; tb.classList.remove("dice-exhausted"); tb.innerHTML = diceFaceImg(1, 4); }
         }
       } else if (field === "apt-total") {
-        // Constrain total >= floor tier
+        // 一共几层不能比住的那一档最高层还低（住 21-30 层就不能是「一共 28 层」）：
+        // 只从够高的选项里摇，骰子点数按比例对应到这些选项上
         const floorVal = document.getElementById(`${prefix}-apt-floor`)?.value;
-        const floorTierMap = {"1-5层":1,"6-10层":2,"11-20层":3,"21-30层":4,"31-40层":5,"40层以上":6};
-        const minTier = floorTierMap[floorVal] || 1;
-        const constrainedRoll = Math.max(roll, minTier);
-        value = HOUSING_TIERS.aptTotal[constrainedRoll];
+        const floorMax = { "1-5层": 5, "6-10层": 10, "11-20层": 20, "21-30层": 30, "31-40层": 40, "40层以上": 41 }[floorVal] || 1;
+        const totalMax = { "6层以下": 5, "10层": 10, "18层": 18, "28层": 28, "35层": 35, "50层以上": Infinity };
+        const pool = Object.values(HOUSING_TIERS.aptTotal).filter((t) => totalMax[t] >= floorMax);
+        value = pool[Math.floor(((roll - 1) * pool.length) / 6)];
         text = value;
         document.getElementById(`${prefix}-apt-total`).value = value;
       }
@@ -4374,6 +4376,13 @@ function _tutFinish() {
 let currentProfileInterpretations = {};
 let longPressJustFired = false;
 
+// 这句看法是不是我写的（新的记了账号 addedByUser；老的只有名字 addedBy）
+function _isMyInterp(it) {
+  if (!currentUser) return false;
+  if (it.addedByUser) return it.addedByUser === currentUser.username;
+  return it.addedBy === currentUser.username || (!!currentUser.name && it.addedBy === currentUser.name);
+}
+
 // 红字的字号：每多一个赞大 5px，赞到 6 个就不再变大（不然赞多了一句话能盖住整张卡）
 const _bubbleSize = (base, agrees) => base + Math.min(agrees, 6) * 5 + "px";
 // 红字后面的点赞数「♥3」：自己赞过是实心，没赞过是空心；没人赞就不显示
@@ -4786,7 +4795,6 @@ ${section("名字", "Name", "name", c.name, "big")}
 ${section("物种", "Species", "breed", c.breed, "territory")}
 ${row([cell("性别", "Gender", "gender", c.gender), cell("年龄", "Age", "age", c.age), cell("身高", "Height", "height", c.height)])}
 ${row([cell("性取向", "Orientation", "orientation", c.orientation), cell("婚恋", "Status", "sterilized", c.status), ...(c.neutered ? [cell("绝育", "Sterilized", "neutered", c.neutered)] : [])])}
-${c.ships ? section("其他关系", "Other Ships", "ships", c.ships) : ""}
 ${row([cell("MBTI", "", "mbti", c.mbti).replace(' <small class="en"></small>', "").replace('<span class="zh">MBTI</span>', "MBTI"), cell("星座", "Horoscope", "horoscope", c.horoscope)])}
 ${section("领地", "Territory", "hukou", c.territory, "territory")}
 ${section("车辆", "Vehicles", "vehicle", c.vehicle)}
@@ -4794,6 +4802,7 @@ ${row([cell("学历", "Education", "edu", c.edu), cell("职业", "Job", "occupat
 ${section("总资产", "Total Assets", "assets", c.assets)}
 ${row([cell("目的", "Here For", "datingPurpose", c.datingPurpose), cell("期望关系", "Looking For", "relationshipGoal", c.relationshipGoal)])}
 ${c.relRows.map((r) => row(r.map(([zh, en, key, text]) => cell(zh, en, key, text)))).join("")}
+${c.ships ? section("其他关系", "Other Ships", "ships", c.ships) : ""}
 ${section("兴趣爱好", "Hobbies", "hobby", c.hobby)}
 ${section("家庭状况", "Family", "parents", c.family)}
 ${c.standards ? section("择偶标准", "Standards", "standards", c.standards) : ""}
@@ -4974,7 +4983,7 @@ function attachLabelHandlers(profileUsername, containerEl, { viewOnly = false } 
     // 点红字 = 赞这句看法（每人每条只能赞一次，赞的人数不限；存到服务器）
     const bubble = e.target.closest(".interp-bubble");
     if (bubble) {
-      if (isMine) return;
+      if (isMine || bubble.dataset.own) return; // 自己的档案、自己写的看法都不能赞
       const myAgrees = parseInt(bubble.dataset.myAgrees || "0");
       if (myAgrees >= 1) return;
       const fieldSpan = bubble.closest(".value[data-field]");
@@ -5041,6 +5050,7 @@ function attachLabelHandlers(profileUsername, containerEl, { viewOnly = false } 
       const myAgrees = interp.agreedBy?.[currentUser?.username] || 0;
       b.dataset.agrees = savedAgrees;
       b.dataset.myAgrees = myAgrees;
+      if (_isMyInterp(interp)) b.dataset.own = "1";
       b.dataset.baseFontSize = "11";
       if (savedAgrees > 0) b.style.fontSize = _bubbleSize(11, savedAgrees);
       _setBubbleLikes(b, savedAgrees, myAgrees > 0);
@@ -5256,7 +5266,7 @@ function submitInterpretation() {
   // 有人写过一模一样的看法 → 不另起一句，算给那句点一次赞
   const same = list.find((it) => _sameInterp(it.text, text));
   if (same) _agreeLocally(same);
-  else list.push({ text, addedBy: currentUser.username, agrees: 0, agreedBy: {} });
+  else list.push({ text, addedBy: currentUser.name || currentUser.username, addedByUser: currentUser.username, agrees: 0, agreedBy: {} });
 
   // Mark the label in the DOM so the red glow indicator appears immediately
   document.querySelectorAll(`.value[data-field="${CSS.escape(field)}"]`).forEach(el => {
@@ -5272,7 +5282,7 @@ function submitInterpretation() {
     .then((data) => {
       // 本地没认出来、服务器合并了（别人刚写的同一句）：把本地多出来的那句换成服务器的结果
       if (!data.merged || same) return;
-      const mine = list.findIndex((it) => it.addedBy === currentUser.username && it.text === text);
+      const mine = list.findIndex((it) => _isMyInterp(it) && it.text === text);
       if (mine >= 0) list.splice(mine, 1);
       if (list[data.interpIndex]) _agreeLocally(list[data.interpIndex], data.agrees);
     })
@@ -5288,6 +5298,7 @@ function _sameInterp(a, b) {
 
 // 合并时给那句看法记一票（每人只能赞一次，和点红字一样）
 function _agreeLocally(it, agrees) {
+  if (_isMyInterp(it)) return; // 自己写的看法，再写一遍也不算赞
   if (!it.agreedBy) it.agreedBy = {};
   const mine = it.agreedBy[currentUser.username] || 0;
   if (agrees === undefined && mine >= 1) return;

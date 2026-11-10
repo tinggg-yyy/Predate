@@ -594,7 +594,7 @@ app.post("/interpretation", function (req, res) {
     const interp = list[interpIndex];
     if (!interp.agreedBy) interp.agreedBy = {};
     const myCount = interp.agreedBy[me] || 0;
-    if (myCount < 1) {
+    if (myCount < 1 && !_isOwnInterp(interp, me)) {
       interp.agreedBy[me] = 1;
       interp.agrees = (interp.agrees || 0) + 1;
       fs.writeFileSync("profiles.json", stringifyProfiles(profiles));
@@ -602,7 +602,8 @@ app.post("/interpretation", function (req, res) {
     }
     return res.json({ success: true, merged: true, interpIndex, agrees: interp.agrees || 0 });
   }
-  list.push({ text, addedBy });
+  // addedBy 是名字（显示用），addedByUser 是账号（判断「是不是自己写的」：自己的不能赞）
+  list.push({ text, addedBy, addedByUser: me });
 
   fs.writeFileSync("profiles.json", stringifyProfiles(profiles));
   io.emit("interpretation-event", { profileUsername, field, text, addedBy });
@@ -610,6 +611,13 @@ app.post("/interpretation", function (req, res) {
 });
 
 // POST /interpretation/agree — 给某个解读点赞（每人最多2次）
+// 这句看法是不是 username 自己写的。新的记了账号 addedByUser；老的只有名字 addedBy，就按名字比
+function _isOwnInterp(interp, username) {
+  if (interp.addedByUser) return interp.addedByUser === username;
+  const name = profiles.find((p) => p.username === username)?.name;
+  return interp.addedBy === username || (!!name && interp.addedBy === name);
+}
+
 app.post("/interpretation/agree", function (req, res) {
   const agreeingUser = requireUser(req, res);
   if (!agreeingUser) return;
@@ -623,6 +631,7 @@ app.post("/interpretation/agree", function (req, res) {
   if (!Array.isArray(arr) || !arr[interpIndex]) return res.status(404).json({ error: "Not found" });
 
   const interp = arr[interpIndex];
+  if (_isOwnInterp(interp, agreeingUser)) return res.status(403).json({ error: "Can't agree with your own interpretation" });
   if (!interp.agreedBy) interp.agreedBy = {};
   const myCount = interp.agreedBy[agreeingUser] || 0;
   // 每人对每条看法只能赞一次，赞的人数不限
