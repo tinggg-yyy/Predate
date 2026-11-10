@@ -1069,12 +1069,52 @@ function drawPixelGrid(ctx, grid, gridText, size, dpr = 1) {
 
 // outSize：输出图片的边长。默认 1152（档案卡大图，一格 36px）；排行榜列表的小头像用小尺寸，画得快、占内存少。
 // 直接按 outSize 画（不是画大再缩）
-function renderGridAsAvatar(grid, gridText, outSize = 1152) {
+// 空白画布但不要换成大字的人（账号）：保持空白
+const _BLANK_AVATAR_KEEP = new Set(["neonnneon"]);
+
+function renderGridAsAvatar(grid, gridText, outSize = 1152, username = "") {
   const canvas = document.createElement("canvas");
   canvas.width = outSize;
   canvas.height = outSize;
+  // 以前交了空白画布的老档案：把他写的字描成格子画（每一格放他的字，和平常「用字来画」一样），
+  // 不是一块空格子（只是显示，不改数据）
+  const blank = !_isValidGrid(grid) || grid.flat().every((c) => c === "/" || c === null || c === "");
+  if (blank && gridText && !_BLANK_AVATAR_KEEP.has(username)) grid = _wordGrid(String(gridText).trim());
   drawPixelGrid(canvas.getContext("2d"), grid, gridText, outSize);
   return canvas.toDataURL();
+}
+
+// 把一个字 / 词描在 32×32 的格子上，笔画经过的格子变成文字格「#4」。
+// 字号先试 Zpix 点阵最清楚的 24、12px；一行放不下就拆成两三行（「nonsense」→「nons / ense」）
+function _wordGrid(word) {
+  const N = 32;
+  const c = document.createElement("canvas");
+  c.width = c.height = N;
+  const g = c.getContext("2d");
+  const chars = [...word];
+  const fits = ({ lines, px }) => {
+    g.font = `${px}px "Zpix", monospace`;
+    return lines.length * px <= 30 && lines.every((l) => g.measureText(l).width <= 30);
+  };
+  const layouts = [];
+  for (const px of [24, 12])
+    for (let k = 1; k <= Math.min(3, chars.length); k++) {
+      const per = Math.ceil(chars.length / k);
+      layouts.push({ px, lines: Array.from({ length: k }, (_, i) => chars.slice(i * per, (i + 1) * per).join("")).filter(Boolean) });
+    }
+  let pick = layouts.find(fits);
+  if (!pick) {
+    // 太长了：一行，字号缩到放得下
+    pick = { lines: [word], px: 11 };
+    while (pick.px > 5 && !fits(pick)) pick.px--;
+  }
+  g.font = `${pick.px}px "Zpix", monospace`;
+  g.textAlign = "center";
+  g.textBaseline = "middle";
+  const top = (N - pick.lines.length * pick.px) / 2;
+  pick.lines.forEach((l, i) => g.fillText(l, N / 2, top + pick.px * (i + 0.5)));
+  const d = g.getImageData(0, 0, N, N).data;
+  return Array.from({ length: N }, (_, y) => Array.from({ length: N }, (_, x) => (d[(y * N + x) * 4 + 3] > 110 ? "#4" : "/")));
 }
 
 function getPixelHeartUrl() {
@@ -1254,7 +1294,7 @@ function cardValues(profile, { perRow = 3 } = {}) {
   return {
     score,
     stampDate: sd ? `${sd.getFullYear()}.${String(sd.getMonth() + 1).padStart(2, "0")}.${String(sd.getDate()).padStart(2, "0")}` : "",
-    avatar: p.grid || !p.avatar ? renderGridAsAvatar(p.grid, p.gridText) : p.avatar,
+    avatar: p.grid || !p.avatar ? renderGridAsAvatar(p.grid, p.gridText, undefined, p.username) : p.avatar,
     name: p.name,
     breed,
     gender: disp(p.gender) || "—",

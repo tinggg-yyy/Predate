@@ -665,6 +665,11 @@ function validatePage(pageId) {
     }
 
     case "profile-photo": {
+      // 不能交空白画布：至少画 5 格（不然头像就是一块空格子）
+      const drawn = _isValidGrid(grid) ? grid.flat().filter((c) => c !== "/" && c !== null && c !== "").length : 0;
+      if (drawn < 5) {
+        showAlert("先在画布上画点什么吧！\nDraw something on the canvas first!"); return false;
+      }
       const word = (document.getElementById("text-input")?.value || "").trim();
       if (!word) {
         showAlert("用一个字或一个词形容一下自己！\nGive yourself one word that is you."); return false;
@@ -8025,7 +8030,7 @@ function _rankThumb(p) {
   const key = `${p.username}|${currentTheme.bg}${currentTheme.ink}|${p.gridText || ""}|${JSON.stringify(p.grid)}`;
   if (!_rankThumbCache.has(key)) {
     if (_rankThumbCache.size > 60) _rankThumbCache.clear();
-    _rankThumbCache.set(key, renderGridAsAvatar(p.grid, p.gridText, 160));
+    _rankThumbCache.set(key, renderGridAsAvatar(p.grid, p.gridText, 160, p.username));
   }
   return _rankThumbCache.get(key);
 }
