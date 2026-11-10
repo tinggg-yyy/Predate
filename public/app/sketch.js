@@ -47,6 +47,49 @@ function draw() {
 
 let drawing = false;
 
+// ── 工具栏：画笔 / 橡皮擦 / 撤销 / 重做 / 清空 ──
+function setBrush() {
+  tool = "brush";
+  document.getElementById("brush-btn")?.classList.add("tool-active");
+  document.getElementById("eraser-btn")?.classList.remove("tool-active");
+}
+
+function setEraser() {
+  tool = "eraser";
+  document.getElementById("eraser-btn")?.classList.add("tool-active");
+  document.getElementById("brush-btn")?.classList.remove("tool-active");
+}
+
+function setClear() {
+  const stroke = [];
+  for (let y = 0; y < 32; y++)
+    for (let x = 0; x < 32; x++)
+      if (grid[y][x] !== "/") {
+        stroke.push({ x, y, oldVal: grid[y][x] });
+        grid[y][x] = "/";
+      }
+  if (stroke.length) {
+    history.push(stroke); // 清空也能撤销
+    redoStack = [];
+  }
+}
+
+function setUndo() {
+  if (history.length === 0) return;
+  const stroke = history.pop();
+  // 撤销前先记下现在的样子，重做时改回来
+  redoStack.push(stroke.map((c) => ({ ...c, newVal: grid[c.y][c.x] })));
+  for (const { x, y, oldVal } of stroke) grid[y][x] = oldVal;
+}
+
+// 重做：撤销点多了可以一步步改回来
+function setRedo() {
+  if (redoStack.length === 0) return;
+  const stroke = redoStack.pop();
+  for (const { x, y, newVal } of stroke) grid[y][x] = newVal;
+  history.push(stroke.map(({ x, y, oldVal }) => ({ x, y, oldVal })));
+}
+
 // 触控笔（Apple Pencil 这类）的力度 → 深浅 1~4；轻轻画是浅的，用力画是深的
 function pressureLevel(p) {
   if (p < 0.2) return 1;

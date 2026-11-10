@@ -166,7 +166,7 @@ function showSpotlight(idx) {
       b.className = 'web-interp-bubble';
       b.dataset.interpIndex = i;
       b.textContent = interp.text;
-      if (interp.agrees > 0) b.style.fontSize = 44 + interp.agrees * 10 + 'px';
+      if (interp.agrees > 0) b.style.fontSize = 44 + Math.min(interp.agrees, 6) * 10 + 'px'; // 赞到 6 个就不再变大（和 app 一样）
       const n = list.length;
       const angle = (i / Math.max(n, 1)) * 2 * Math.PI;
       const ringR = Math.max(140, n * 70);
@@ -901,7 +901,7 @@ socket.on("interpretation-agree-event", (data) => {
   const bubble = el.querySelector(`.web-interp-bubble[data-interp-index="${data.interpIndex}"]`);
   if (!bubble) return;
 
-  bubble.style.fontSize = 44 + data.agrees * 10 + 'px';
+  bubble.style.fontSize = 44 + Math.min(data.agrees, 6) * 10 + 'px';
 });
 
 // ── 启动 ─────────────────────────────────────────────

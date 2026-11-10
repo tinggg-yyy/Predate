@@ -8,25 +8,25 @@ const _THEME_KEY = "predate_theme";
 const THEME_PRESETS = [
   // 默认配色：必须排第一个（没选过配色的人用 THEME_PRESETS[0]）
   { id: "gameboy", zh: "原版灰绿", en: "GameBoy", bg: "#a9b0a2", ink: "#283023" },
-  // 有梗的：流行文化、生活里一眼认得出的配色（放在前面）
+  { id: "night", zh: "夜间", en: "Night", bg: "#23281f", ink: "#c8d4b8" },
+  // 有梗的配色和对比跳色交错排
   { id: "brat", zh: "brat", en: "brat", bg: "#8ace00", ink: "#000000" },
-  { id: "bsod", zh: "蓝屏", en: "Blue Screen", bg: "#0000aa", ink: "#ffffff" },
-  { id: "lucky", zh: "发财红", en: "Lucky Red", bg: "#c8161d", ink: "#f7d36b" },
-  { id: "dopamine", zh: "多巴胺", en: "Dopamine", bg: "#ff7a00", ink: "#3a0a99" },
-  { id: "maillard", zh: "美拉德", en: "Maillard", bg: "#8b5a3c", ink: "#f3e2c7" },
-  { id: "riso", zh: "孔版印刷", en: "Riso", bg: "#ff48b0", ink: "#13308c" },
-  { id: "blueprint", zh: "蓝图", en: "Blueprint", bg: "#1d4f91", ink: "#dce9ff" },
-  { id: "sticky", zh: "便利贴", en: "Sticky Note", bg: "#ffe97a", ink: "#3d3a33" },
-  { id: "receipt", zh: "小票", en: "Receipt", bg: "#f6f4ee", ink: "#5e4f86" },
-  // 对比跳色：底色和墨色差得很开
   { id: "lemon", zh: "柠檬紫", en: "Lemon Grape", bg: "#f2e14c", ink: "#3b1f6b" },
+  { id: "bsod", zh: "蓝屏", en: "Blue Screen", bg: "#0000aa", ink: "#ffffff" },
   { id: "mint", zh: "薄荷樱桃", en: "Mint Cherry", bg: "#a6e3c4", ink: "#a3122c" },
+  { id: "lucky", zh: "发财红", en: "Lucky Red", bg: "#c8161d", ink: "#f7d36b" },
   { id: "tangerine", zh: "橘子海军", en: "Tangerine Navy", bg: "#ff9f4a", ink: "#102a6b" },
+  { id: "dopamine", zh: "多巴胺", en: "Dopamine", bg: "#ff7a00", ink: "#3a0a99" },
   { id: "bubblegum", zh: "泡泡糖", en: "Bubblegum", bg: "#ffb6d2", ink: "#0f5132" },
+  { id: "maillard", zh: "美拉德", en: "Maillard", bg: "#8b5a3c", ink: "#f3e2c7" },
   { id: "sky", zh: "天空橙", en: "Sky Orange", bg: "#93d2f5", ink: "#9a3300" },
+  { id: "riso", zh: "孔版印刷", en: "Riso", bg: "#ff48b0", ink: "#13308c" },
   { id: "lime", zh: "荧光绿", en: "Neon Lime", bg: "#c8f542", ink: "#5a128a" },
+  { id: "blueprint", zh: "蓝图", en: "Blueprint", bg: "#1d4f91", ink: "#dce9ff" },
   { id: "tiffany", zh: "蒂芙尼", en: "Tiffany", bg: "#86d8cf", ink: "#7a1f3d" },
+  { id: "sticky", zh: "便利贴", en: "Sticky Note", bg: "#ffe97a", ink: "#3d3a33" },
   { id: "tomato", zh: "番茄", en: "Tomato", bg: "#e8463f", ink: "#fff1cf" },
+  { id: "receipt", zh: "小票", en: "Receipt", bg: "#f6f4ee", ink: "#5e4f86" },
   { id: "klein", zh: "克莱因蓝", en: "Klein Blue", bg: "#1f3fae", ink: "#ffd23f" },
   { id: "forest", zh: "墨绿金", en: "Forest Gold", bg: "#1f3d2b", ink: "#e8c55c" },
   { id: "terminal", zh: "黑客", en: "Terminal", bg: "#0d120d", ink: "#3dff6e" },
@@ -37,7 +37,6 @@ const THEME_PRESETS = [
   { id: "amber", zh: "琥珀橙", en: "Amber", bg: "#d9b27c", ink: "#3d2610" },
   { id: "lavender", zh: "薰衣草", en: "Lavender", bg: "#b9b0d0", ink: "#2c2440" },
   { id: "paper", zh: "旧报纸", en: "Newsprint", bg: "#e4dfd2", ink: "#2a2a2a" },
-  { id: "night", zh: "夜间", en: "Night", bg: "#23281f", ink: "#c8d4b8" },
 ];
 
 const _hexToRgb = (hex) => {

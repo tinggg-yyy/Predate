@@ -1009,17 +1009,15 @@ li.other .words {
   animation: interp-glow 1.6s ease-in-out infinite;
 }
 
-/* 被评论过的栏一闪一闪：亮红 + 红光。原来是墨色 ↔ 暗红，两个都很深，短的字（「雄」「100」）几乎看不出在闪 */
+/* 被评论过的栏一闪一闪：墨色 ↔ 红色 + 一圈淡淡的红光（太暗看不出在闪，太亮又刺眼） */
 @keyframes interp-glow {
   0%, 100% {
     color: var(--c-text);
     text-shadow: none;
   }
   50% {
-    color: var(--c-err);
-    text-shadow:
-      0 0 6px rgba(204, 30, 30, 0.70),
-      0 0 14px rgba(204, 30, 30, 0.45);
+    color: #c42a2a;
+    text-shadow: 0 0 4px rgba(204, 30, 30, 0.35);
   }
 }
 
@@ -1074,6 +1072,13 @@ li.other .words {
   66% {
     transform: translate(calc(-50% + var(--fx) - var(--dy)), calc(-50% + var(--fy) + var(--dx))) scale(1);
   }
+}
+
+/* 评论后面的点赞数：自己点过的是实心 ♥ */
+.interp-likes {
+  margin-left: 2px;
+  font-size: 0.8em;
+  opacity: 0.85;
 }
 
 /* Like / Skip reason popup */

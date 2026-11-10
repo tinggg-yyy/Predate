@@ -587,15 +587,15 @@ app.post("/interpretation", function (req, res) {
       : [];
   }
   const list = profile.interpretations[field];
-  // 有人写过一模一样的看法 → 不另起一句，算给那句点一次赞（每人最多 2 次，和 /interpretation/agree 一样）
+  // 有人写过一模一样的看法 → 不另起一句，算给那句点一次赞（每人只能赞一次，和 /interpretation/agree 一样）
   const norm = (t) => String(t || "").trim().replace(/\s+/g, " ").toLowerCase();
   const interpIndex = list.findIndex((it) => norm(it.text) === norm(text));
   if (interpIndex >= 0) {
     const interp = list[interpIndex];
     if (!interp.agreedBy) interp.agreedBy = {};
     const myCount = interp.agreedBy[me] || 0;
-    if (myCount < 2) {
-      interp.agreedBy[me] = myCount + 1;
+    if (myCount < 1) {
+      interp.agreedBy[me] = 1;
       interp.agrees = (interp.agrees || 0) + 1;
       fs.writeFileSync("profiles.json", stringifyProfiles(profiles));
       io.emit("interpretation-agree-event", { profileUsername, field, interpIndex, agrees: interp.agrees });
@@ -625,9 +625,10 @@ app.post("/interpretation/agree", function (req, res) {
   const interp = arr[interpIndex];
   if (!interp.agreedBy) interp.agreedBy = {};
   const myCount = interp.agreedBy[agreeingUser] || 0;
-  if (myCount >= 2) return res.json({ limited: true, agrees: interp.agrees || 0 });
+  // 每人对每条看法只能赞一次，赞的人数不限
+  if (myCount >= 1) return res.json({ limited: true, agrees: interp.agrees || 0 });
 
-  interp.agreedBy[agreeingUser] = myCount + 1;
+  interp.agreedBy[agreeingUser] = 1;
   interp.agrees = (interp.agrees || 0) + 1;
 
   fs.writeFileSync("profiles.json", stringifyProfiles(profiles));

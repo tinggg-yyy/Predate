@@ -1362,13 +1362,7 @@ function getPetAge() {
   const years = Math.floor(totalMonths / 12);
   const months = Math.abs(totalMonths % 12);
 
-  if (years === 0) {
-    return `${months}`;
-  } else if (months === 0) {
-    return `${years}`;
-  } else {
-    return `${years}.${months}`;
-  }
+  return ageText(years, months);
 }
 
 // Mammal subgroups (up to 4-level selection for Mammals: class→subgroup→sub-subgroup→species)
@@ -4329,7 +4323,7 @@ function _tutHook(ev, data) {
   }
   else if (ev === "interp-expand" && step === "tap") _tutGo("agree");
   else if (ev === "interp-collapse" && step === "agree") _tutGo("tap");
-  else if (ev === "agree" && step === "agree" && ++_tut.agrees >= 2) setTimeout(() => _tutGo("impressBtn"), 500);
+  else if (ev === "agree" && step === "agree" && ++_tut.agrees >= 1) setTimeout(() => _tutGo("impressBtn"), 500);
   else if (ev === "imp-open" && step === "impressBtn") _tutGo("impWrite");
   else if (ev === "imp-close") backIfStill("impWrite", "impressBtn");
   else if (ev === "imp-submit" && step === "impWrite") _tutGo("impDone");
@@ -4379,6 +4373,20 @@ function _tutFinish() {
 
 let currentProfileInterpretations = {};
 let longPressJustFired = false;
+
+// 红字的字号：每多一个赞大 5px，赞到 6 个就不再变大（不然赞多了一句话能盖住整张卡）
+const _bubbleSize = (base, agrees) => base + Math.min(agrees, 6) * 5 + "px";
+// 红字后面的点赞数「♥3」：自己赞过是实心，没赞过是空心；没人赞就不显示
+function _setBubbleLikes(bubble, agrees, mine) {
+  let el = bubble.querySelector(".interp-likes");
+  if (!agrees) return el?.remove();
+  if (!el) {
+    el = document.createElement("span");
+    el.className = "interp-likes";
+    bubble.appendChild(el);
+  }
+  el.textContent = `${mine ? "♥" : "♡"}${agrees}`;
+}
 
 // ── Pixel icon system ─────────────────────────────────────────
 
@@ -4888,10 +4896,14 @@ let interpTarget = { field: null, profileUsername: null, labelText: null };
 let touchStartX = 0;
 let touchStartY = 0;
 
-function attachLabelHandlers(profileUsername, containerEl) {
+// viewOnly：排行榜里只能短按看评论，不能长按写、不能点红字点赞
+function attachLabelHandlers(profileUsername, containerEl, { viewOnly = false } = {}) {
   const container = containerEl || document.getElementById("swipe-container");
   // 自己的档案（「我的档案」）：只能短按看别人写了什么，不能长按给自己写、也不能点红字给自己点赞
-  const isMine = !!currentUser && profileUsername === currentUser.username;
+  const isMine = viewOnly || (!!currentUser && profileUsername === currentUser.username);
+  // 这一块档案的评论。浏览页、我的档案、排行榜、消息里看的档案共用 currentProfileInterpretations，
+  // 点哪一块就换成哪一块的（不然看完别的档案回来，点出来的是别人的评论）
+  const interps = currentProfileInterpretations;
 
   // Remove old listeners by replacing the container node's cloned handlers
   // (simpler: just use a flag so we don't double-bind across showProfile calls)
@@ -4904,6 +4916,7 @@ function attachLabelHandlers(profileUsername, containerEl) {
   }
 
   container._onTouchStart = (e) => {
+    currentProfileInterpretations = interps;
     // 新的一次按下：上一次长按后浏览器没补发 click 的话，标记会一直留着把这次短按吞掉
     longPressJustFired = false;
     const label = e.target.closest(".value[data-field]");
@@ -4952,17 +4965,18 @@ function attachLabelHandlers(profileUsername, containerEl) {
 
   // Short tap: expand → show all red comment bubbles crowded in same span
   container._onClick = (e) => {
+    currentProfileInterpretations = interps;
     if (longPressJustFired) {
       longPressJustFired = false;
       return;
     }
 
-    // Tapping a red bubble → agree (max 2 per user, persisted to server)
+    // 点红字 = 赞这句看法（每人每条只能赞一次，赞的人数不限；存到服务器）
     const bubble = e.target.closest(".interp-bubble");
     if (bubble) {
       if (isMine) return;
       const myAgrees = parseInt(bubble.dataset.myAgrees || "0");
-      if (myAgrees >= 2) return;
+      if (myAgrees >= 1) return;
       const fieldSpan = bubble.closest(".value[data-field]");
       const field = fieldSpan?.dataset.field;
       const interpIndex = parseInt(bubble.dataset.interpIndex);
@@ -4979,15 +4993,16 @@ function attachLabelHandlers(profileUsername, containerEl) {
         .then((r) => r.json())
         .then((data) => {
           if (!data.limited) {
-            bubble.dataset.myAgrees = myAgrees + 1;
+            bubble.dataset.myAgrees = 1;
             bubble.dataset.agrees = data.agrees;
             const base = parseFloat(bubble.dataset.baseFontSize || "11");
-            bubble.style.fontSize = base + data.agrees * 5 + "px";
+            bubble.style.fontSize = _bubbleSize(base, data.agrees);
+            _setBubbleLikes(bubble, data.agrees, true);
             const arr = currentProfileInterpretations[field];
             if (Array.isArray(arr) && arr[interpIndex]) {
               arr[interpIndex].agrees = data.agrees;
               if (!arr[interpIndex].agreedBy) arr[interpIndex].agreedBy = {};
-              arr[interpIndex].agreedBy[currentUser.username] = myAgrees + 1;
+              arr[interpIndex].agreedBy[currentUser.username] = 1;
             }
             _tutHook("agree");
           }
@@ -5027,7 +5042,8 @@ function attachLabelHandlers(profileUsername, containerEl) {
       b.dataset.agrees = savedAgrees;
       b.dataset.myAgrees = myAgrees;
       b.dataset.baseFontSize = "11";
-      if (savedAgrees > 0) b.style.fontSize = 11 + savedAgrees * 5 + "px";
+      if (savedAgrees > 0) b.style.fontSize = _bubbleSize(11, savedAgrees);
+      _setBubbleLikes(b, savedAgrees, myAgrees > 0);
 
       const n = interpList.length;
       // Evenly distribute on an ellipse so starting positions are already spread
@@ -5270,12 +5286,12 @@ function _sameInterp(a, b) {
   return norm(a) === norm(b);
 }
 
-// 合并时给那句看法记一票（每人最多 2 票，和点红字一样）
+// 合并时给那句看法记一票（每人只能赞一次，和点红字一样）
 function _agreeLocally(it, agrees) {
   if (!it.agreedBy) it.agreedBy = {};
   const mine = it.agreedBy[currentUser.username] || 0;
-  if (agrees === undefined && mine >= 2) return;
-  it.agreedBy[currentUser.username] = Math.min(2, mine + 1);
+  if (agrees === undefined && mine >= 1) return;
+  it.agreedBy[currentUser.username] = 1;
   it.agrees = agrees ?? (it.agrees || 0) + 1;
 }
 
@@ -7987,7 +8003,7 @@ function closeMyProfile() {
 }
 
 // ── 排行榜：和大屏 web 同一个规则（分数 − 被跳过次数，取前十）──
-// 先显示列表，点一个人进去看档案；只能看，不接长按 / 点按（不能写解读、不能赞同），也没有喜欢 / 跳过按钮
+// 先显示列表，点一个人进去看档案；只能看：短按能看评论，但不能长按写解读、不能点红字赞同，也没有喜欢 / 跳过按钮
 // 服务器 /ranking 只发前十名；上次的结果先显示，新数据到了再刷新；列表头像画小图并缓存
 let _rankList = [];
 const _rankThumbCache = new Map();
@@ -8064,6 +8080,9 @@ function openRankDetail(i) {
   const body = document.getElementById("rank-detail-body");
   body.innerHTML = renderCardHTML(p);
   attachSectionDragScroll(body);
+  // 一闪一闪的栏短按看评论（只能看：不能写解读、不能点赞）
+  currentProfileInterpretations = p.interpretations || {};
+  attachLabelHandlers(p.username, body, { viewOnly: true });
   document.getElementById("rank-detail-title").textContent = `No.${i + 1}`;
   document.getElementById("rank-title").classList.add("hidden");
   document.getElementById("rank-detail-title").classList.remove("hidden");

@@ -239,6 +239,22 @@ function _cnMoneyEn(t) {
   return `¥${s}${m[3] || ""}`;
 }
 
+// 年龄：「1岁9个月 / 1 yr 9 mo」，不满一岁「7个月 / 7 mo」
+function ageText(years, months) {
+  const yr = years === 1 ? "yr" : "yrs";
+  if (years === 0) return `${months}个月 / ${months} mo`;
+  if (!months) return `${years}岁 / ${years} ${yr}`;
+  return `${years}岁${months}个月 / ${years} ${yr} ${months} mo`;
+}
+// 档案卡上的年龄。老档案只存了数字（2026-05 起没带单位）：「1.9」= 1 岁 9 个月，「23」= 23 岁。
+// 那时不满一岁只存月数，整数分不出是岁还是月，一律当岁
+function fmtAge(a) {
+  const s = String(a ?? "").trim();
+  const m = s.match(/^(\d+)(?:\.(\d+))?$/);
+  if (!m) return s || "—";
+  return ageText(Number(m[1]), m[2] ? Number(m[2]) : 0);
+}
+
 function disp(v) {
   if (DISP[v]) return DISP[v];
   if (typeof v !== "string") return v;
@@ -1230,7 +1246,7 @@ function cardValues(profile, { perRow = 3 } = {}) {
     name: p.name,
     breed,
     gender: disp(p.gender) || "—",
-    age: p.age || "—",
+    age: p.age ? fmtAge(p.age) : "—",
     height: p.height || "—",
     orientation: disp(p.orientation) || "—",
     status: disp(p.sterilized || rel.status) || "—",
