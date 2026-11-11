@@ -4,6 +4,16 @@ let ranking = [];
 let currentIdx = 0;
 let cycleTimer = null;
 
+// ── 展览用：性取向（非异性恋）/ 开放关系 这几个词蒙一层纱：中文糊到看不出，英文轻轻糊一点 ──
+// 只作用在已经转义过的 HTML 上（所以 "&" 写成 &amp;）
+const _BLUR_ZH = /双性恋|同性恋|泛性恋|无性恋|开放关系/g;
+const _BLUR_EN = /\bBisexual\b|\bPansexual\b|\bAsexual\b|\bGay\s*(?:&amp;|·)\s*Lesbian\b|\bOpen Relationship\b/gi;
+const blurSensitive = (html) => html
+  .replace(_BLUR_ZH, (m) => `<span class="blur-word">${m}</span>`)
+  .replace(_BLUR_EN, (m) => `<span class="blur-word blur-word-en">${m}</span>`);
+// 纯文本 → 转义 → 蒙纱，直接写进元素
+const setBlurredText = (el, text) => { el.innerHTML = blurSensitive(escapeHtml(text)); };
+
 // ── 像素 emoji（大屏用的大号版本；app 用 shared 里的小号 getPixelHeartUrl）──
 
 function webHeartUrl() {
@@ -92,7 +102,7 @@ function showSpotlight(idx) {
   const c = cardValues(p, { perRow: Infinity });
 
   // 一栏的值：「中文 / English」拆成中文一行 + 英文一行（fmtBI 已经转义过用户输入）
-  const val = (text) => `<span class="value">${fmtBI(text)}</span>`;
+  const val = (text) => `<span class="value">${blurSensitive(fmtBI(text))}</span>`;
   const cell = (zh, en, field, text, extra = "") =>
     `<div class="cell ${extra}" data-field="${field}"><span class="label">${zh}${en ? `<br><small>${en}</small>` : ""}</span>${val(text)}</div>`;
   // 整栏（领地、车辆、爱好、家庭…）：全部放一行中文 + 一行英文
@@ -120,7 +130,7 @@ function showSpotlight(idx) {
     <div class="avatar-row">
       <div class="avatar-meta-left">
         <div class="avatar-name-display">${escapeHtml(c.name || "—")}</div>
-        <div class="avatar-breed-display">${fmtBI(c.breed)}</div>
+        <div class="avatar-breed-display">${blurSensitive(fmtBI(c.breed))}</div>
       </div>
       <div class="avatar-wrap">
         <!-- 总资产等级写在头像上方 -->
@@ -165,7 +175,7 @@ function showSpotlight(idx) {
       const b = document.createElement('span');
       b.className = 'web-interp-bubble';
       b.dataset.interpIndex = i;
-      b.textContent = interp.text;
+      setBlurredText(b, interp.text);
       if (interp.agrees > 0) b.style.fontSize = 44 + Math.min(interp.agrees, 6) * 10 + 'px'; // 赞到 6 个就不再变大（和 app 一样）
       const n = list.length;
       const angle = (i / Math.max(n, 1)) * 2 * Math.PI;
@@ -669,7 +679,7 @@ function spawnDanmaku(text, type = "like") {
   const layer = document.getElementById("danmaku-layer");
   const el = document.createElement("div");
   el.className = `danmaku danmaku-${type}`;
-  el.textContent = text;
+  setBlurredText(el, text);
 
   el.style.top = 10 + Math.random() * 75 + "%";
   layer.appendChild(el);
@@ -794,7 +804,7 @@ function initTicker(profiles) {
   // Duplicate for seamless loop
   const full = [...msgs, ...msgs];
   track.innerHTML = full
-    .map((m) => `<span class="ticker-item ticker-item-${m.type}">${escapeHtml(m.text)}</span>`)
+    .map((m) => `<span class="ticker-item ticker-item-${m.type}">${blurSensitive(escapeHtml(m.text))}</span>`)
     .join('<span class="ticker-sep">  </span>');
 
   // Calculate scroll duration based on content length
@@ -808,7 +818,7 @@ function pushTickerMessage(text, type = "alert") {
   if (!track) return;
   const span = document.createElement("span");
   span.className = `ticker-item ticker-item-${type}`;
-  span.textContent = text;
+  setBlurredText(span, text);
   const sep = document.createElement("span");
   sep.className = "ticker-sep";
   sep.textContent = "  ";
@@ -892,7 +902,7 @@ socket.on("interpretation-event", (data) => {
   const b = document.createElement('span');
   b.className = 'web-interp-bubble';
   b.dataset.interpIndex = i;
-  b.textContent = data.text;
+  setBlurredText(b, data.text);
 
   const angle = (i / Math.max(n, 1)) * 2 * Math.PI;
   const ringR = Math.max(140, n * 70);

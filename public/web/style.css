@@ -660,3 +660,12 @@ html, body {
 }
 
 /* board is the only element that needs the grid bg — transparent children show it through */
+
+/* 展览用：性取向 / 开放关系这几个词蒙一层纱（script.js 的 blurSensitive） */
+.blur-word {
+  display: inline-block;
+  filter: blur(0.22em);
+  opacity: 0.85;
+  user-select: none;
+}
+.blur-word-en { filter: blur(0.1em); }
