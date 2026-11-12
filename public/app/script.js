@@ -684,6 +684,23 @@ function validateAndGoTo(fromPage, toPage) {
   if (validatePage(fromPage)) goTo(toPage);
 }
 
+// 性别 / 性取向页：性别不是雄 / 雌，或性取向不是异性恋，先弹窗问一下
+// 「支持」→ 留在这页重选；「@_@」→ 下一步
+function validateGenderAndGoTo() {
+  if (!validatePage("profile-gender")) return;
+  const binary = ["雄/Male", "雌/Female"].includes(_val("petGender"));
+  const straight = _val("petOrientation") === "异性恋/Straight";
+  if (binary && straight) return goTo("profile-housing");
+  document.getElementById("orientation-confirm-overlay").classList.remove("hidden");
+}
+function orientationConfirmSupport() {
+  document.getElementById("orientation-confirm-overlay").classList.add("hidden");
+}
+function orientationConfirmNext() {
+  document.getElementById("orientation-confirm-overlay").classList.add("hidden");
+  goTo("profile-housing");
+}
+
 function validateAndCreateCard() {
   // 正在保存时忽略重复点击，防止同一份档案被提交多次
   if (_pendingProfileSave) return;
@@ -4751,13 +4768,30 @@ function rollIncomeTierDice() {
   }, 70);
 }
 
+// ── 展览用：性取向（非异性恋）/ 开放关系 这几个词在档案卡上蒙一层纱，短按一下变清晰 ──
+// 只作用在已经转义过的 HTML 上（所以 "&" 写成 &amp;）
+const _SENSITIVE_ZH = /双性恋|同性恋|泛性恋|无性恋|开放关系/g;
+const _SENSITIVE_EN = /\bBisexual\b|\bPansexual\b|\bAsexual\b|\bGay\s*(?:&amp;|·)\s*Lesbian\b|\bOpen Relationship\b/gi;
+const blurSensitive = (html) => html
+  .replace(_SENSITIVE_ZH, (m) => `<span class="blur-word">${m}</span>`)
+  .replace(_SENSITIVE_EN, (m) => `<span class="blur-word blur-word-en">${m}</span>`);
+// 短按糊掉的词：这一栏糊掉的字一起变清晰。capture 阶段先拦下，这一下不再算作展开评论 / 点赞
+document.addEventListener("click", (e) => {
+  const word = e.target.closest?.(".blur-word:not(.revealed)");
+  if (!word) return;
+  e.stopPropagation();
+  e.preventDefault();
+  (word.closest(".value") || word).querySelectorAll(".blur-word").forEach((w) => w.classList.add("revealed"));
+  word.classList.add("revealed");
+}, true);
+
 function renderValue(profile, field, valueText, extraClass = "") {
   const raw = profile.interpretations && profile.interpretations[field];
   const interps = Array.isArray(raw) ? raw : raw ? [raw] : [];
   // 名字原样显示成一行，不按「中文 / English」拆开（名字里可能本来就有 /，比如 AC/DC）
   const display = field === "name"
     ? `<span class="bi-zh">${escapeHtml(valueText || "—")}</span>`
-    : fmtBI(valueText);
+    : blurSensitive(fmtBI(valueText));
   if (interps.length > 0) {
     return `<span class="value ${extraClass} has-interpretations" data-field="${field}">${display}</span>`;
   }

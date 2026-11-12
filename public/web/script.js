@@ -4,13 +4,16 @@ let ranking = [];
 let currentIdx = 0;
 let cycleTimer = null;
 
-// ── 展览用：性取向（非异性恋）/ 开放关系 这几个词蒙一层纱：中文糊到看不出，英文轻轻糊一点 ──
+// ── 展览用：性取向（非异性恋）/ 开放关系 这几个词（中英文）——
+//   档案卡格子里留空白；跑马灯、弹幕、解读气泡里蒙一层纱（中文糊到看不出，英文轻轻糊一点）
 // 只作用在已经转义过的 HTML 上（所以 "&" 写成 &amp;）
-const _BLUR_ZH = /双性恋|同性恋|泛性恋|无性恋|开放关系/g;
-const _BLUR_EN = /\bBisexual\b|\bPansexual\b|\bAsexual\b|\bGay\s*(?:&amp;|·)\s*Lesbian\b|\bOpen Relationship\b/gi;
+const _SENSITIVE_ZH = /双性恋|同性恋|泛性恋|无性恋|开放关系/g;
+const _SENSITIVE_EN = /\bBisexual\b|\bPansexual\b|\bAsexual\b|\bGay\s*(?:&amp;|·)\s*Lesbian\b|\bOpen Relationship\b/gi;
+const hideSensitive = (html) => [_SENSITIVE_ZH, _SENSITIVE_EN]
+  .reduce((h, re) => h.replace(re, (m) => `<span class="hidden-word">${m}</span>`), html);
 const blurSensitive = (html) => html
-  .replace(_BLUR_ZH, (m) => `<span class="blur-word">${m}</span>`)
-  .replace(_BLUR_EN, (m) => `<span class="blur-word blur-word-en">${m}</span>`);
+  .replace(_SENSITIVE_ZH, (m) => `<span class="blur-word">${m}</span>`)
+  .replace(_SENSITIVE_EN, (m) => `<span class="blur-word blur-word-en">${m}</span>`);
 // 纯文本 → 转义 → 蒙纱，直接写进元素
 const setBlurredText = (el, text) => { el.innerHTML = blurSensitive(escapeHtml(text)); };
 
@@ -102,7 +105,7 @@ function showSpotlight(idx) {
   const c = cardValues(p, { perRow: Infinity });
 
   // 一栏的值：「中文 / English」拆成中文一行 + 英文一行（fmtBI 已经转义过用户输入）
-  const val = (text) => `<span class="value">${blurSensitive(fmtBI(text))}</span>`;
+  const val = (text) => `<span class="value">${hideSensitive(fmtBI(text))}</span>`;
   const cell = (zh, en, field, text, extra = "") =>
     `<div class="cell ${extra}" data-field="${field}"><span class="label">${zh}${en ? `<br><small>${en}</small>` : ""}</span>${val(text)}</div>`;
   // 整栏（领地、车辆、爱好、家庭…）：全部放一行中文 + 一行英文
@@ -130,7 +133,7 @@ function showSpotlight(idx) {
     <div class="avatar-row">
       <div class="avatar-meta-left">
         <div class="avatar-name-display">${escapeHtml(c.name || "—")}</div>
-        <div class="avatar-breed-display">${blurSensitive(fmtBI(c.breed))}</div>
+        <div class="avatar-breed-display">${hideSensitive(fmtBI(c.breed))}</div>
       </div>
       <div class="avatar-wrap">
         <!-- 总资产等级写在头像上方 -->

@@ -2850,3 +2850,39 @@ html[data-lang="en"] .tut-text .en {
   padding-left: 4px !important;
   padding-right: 4px !important;
 }
+
+/* 「一种性取向两种性别」弹窗的两个按钮：一行放下，不换行 */
+#orientation-confirm-overlay .theme-name-btns .nes-btn {
+  white-space: nowrap;
+  letter-spacing: 0;
+  padding-left: 4px !important;
+  padding-right: 4px !important;
+}
+
+/* 展览用：性取向 / 开放关系这几个词蒙一层纱（script.js 的 blurSensitive），短按变清晰 */
+.blur-word {
+  display: inline-block;
+  filter: blur(0.22em);
+  opacity: 0.85;
+  user-select: none;
+  cursor: pointer;
+  transition: filter 0.25s, opacity 0.25s;
+}
+.blur-word-en { filter: blur(0.1em); }
+.blur-word.revealed {
+  filter: none;
+  opacity: 1;
+  cursor: auto;
+}
+
+/* 必吃榜整体往下移一点，◀ 和下面第一个框之间多留些空，不再叠在一起 */
+#rank-overlay {
+  padding-top: 44px;
+}
+#rank-overlay .setup-prev-btn {
+  top: 44px;
+}
+#rank-overlay .rank-list,
+#rank-overlay .rank-detail {
+  margin-top: 10px;
+}

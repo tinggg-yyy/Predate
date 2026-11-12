@@ -52,6 +52,18 @@
       </div>
     </div>
 
+    <!-- 性别不是雄 / 雌，或性取向不是异性恋：点 ▶ 时问一下（见 validateGenderAndGoTo） -->
+    <div id="orientation-confirm-overlay" class="custom-alert-overlay hidden">
+      <div class="custom-alert-box">
+        <p>你确定不支持一种性取向两种性别原则吗
+Are you sure you don't support the "one sexuality, two genders" principle?</p>
+        <div class="theme-name-btns">
+          <button class="nes-btn is-primary" onclick="orientationConfirmSupport()">支持 Support</button>
+          <button class="nes-btn" onclick="orientationConfirmNext()">@_@</button>
+        </div>
+      </div>
+    </div>
+
     <!-- 给「我的配色」起名 / 改名 -->
     <div id="theme-name-overlay" class="custom-alert-overlay hidden">
       <form class="custom-alert-box theme-name-box" onsubmit="event.preventDefault(); confirmThemeName();">
@@ -320,7 +332,7 @@
         </div>
 
       </div>
-      <button class="nes-btn setup-next-btn" onclick="validateAndGoTo('profile-gender','profile-housing')">▶</button>
+      <button class="nes-btn setup-next-btn" onclick="validateGenderAndGoTo()">▶</button>
     </section>
 
     <!-- Profile - Housing -->

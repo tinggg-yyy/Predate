@@ -661,7 +661,9 @@ html, body {
 
 /* board is the only element that needs the grid bg — transparent children show it through */
 
-/* 展览用：性取向 / 开放关系这几个词蒙一层纱（script.js 的 blurSensitive） */
+/* 展览用：性取向 / 开放关系这几个词（script.js 的 hideSensitive / blurSensitive）
+   档案卡格子里留空白（占位保留，排版不变）；跑马灯、弹幕、气泡里蒙一层纱 */
+.hidden-word { visibility: hidden; }
 .blur-word {
   display: inline-block;
   filter: blur(0.22em);
